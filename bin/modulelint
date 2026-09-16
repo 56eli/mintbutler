@@ -37,6 +37,304 @@ trim_string() {
   printf '%s' "${s}"
 }
 
+strip_shell_comments() {
+  local script_file="${1}"
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    local out="" in_quote="" i len="${#line}"
+    for (( i=0; i<len; i++ )); do
+      local c="${line:i:1}"
+      if [[ -z "${in_quote}" ]]; then
+        if [[ "${c}" == '"' || "${c}" == "'" ]]; then
+          in_quote="${c}"
+          out="${out}${c}"
+        elif [[ "${c}" == "#" ]]; then
+          if [[ "${i}" -eq 0 || "${line:i-1:1}" =~ [[:space:]] ]]; then
+            break
+          else
+            out="${out}${c}"
+          fi
+        else
+          out="${out}${c}"
+        fi
+      else
+        out="${out}${c}"
+        if [[ "${c}" == "${in_quote}" ]]; then
+          local esc=0 k=$((i-1))
+          while [[ "${k}" -ge 0 && "${line:k:1}" == '\' ]]; do
+            esc=$((esc + 1))
+            k=$((k - 1))
+          done
+          if [[ $((esc % 2)) -eq 0 ]]; then
+            in_quote=""
+          fi
+        fi
+      fi
+    done
+    printf '%s\n' "${out}"
+  done < "${script_file}"
+}
+
+check_rm_rf_targets() {
+  local text="${1}"
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    local clean_line
+    clean_line="$(printf '%s\n' "${line}" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+    local stmt
+    while IFS= read -r stmt || [[ -n "${stmt}" ]]; do
+      stmt="$(printf '%s\n' "${stmt}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      if [[ -z "${stmt}" ]]; then continue; fi
+
+      if [[ ! "${stmt}" =~ (^|[[:space:]])rm([[:space:]]|$) ]]; then continue; fi
+
+      local -a tokens=()
+      local cur="" in_quote="" i len="${#stmt}"
+      for (( i=0; i<len; i++ )); do
+        local c="${stmt:i:1}"
+        if [[ -z "${in_quote}" ]]; then
+          if [[ "${c}" == '"' || "${c}" == "'" ]]; then
+            in_quote="${c}"
+            cur="${cur}${c}"
+          elif [[ "${c}" =~ [[:space:]] ]]; then
+            if [[ -n "${cur}" ]]; then tokens+=("${cur}"); cur=""; fi
+          else
+            cur="${cur}${c}"
+          fi
+        else
+          cur="${cur}${c}"
+          if [[ "${c}" == "${in_quote}" ]]; then in_quote=""; fi
+        fi
+      done
+      if [[ -n "${cur}" ]]; then tokens+=("${cur}"); fi
+
+      local rm_idx=-1
+      local t_i
+      for (( t_i=0; t_i<${#tokens[@]}; t_i++ )); do
+        if [[ "$(basename "${tokens[t_i]}")" == "rm" ]]; then
+          rm_idx="${t_i}"
+          break
+        fi
+      done
+      if [[ "${rm_idx}" -eq -1 ]]; then continue; fi
+
+      local has_r=0 has_f=0
+      local -a targets=()
+      local parsing_flags=1
+      local j
+      for (( j=rm_idx+1; j<${#tokens[@]}; j++ )); do
+        local tok="${tokens[j]}"
+        if [[ "${parsing_flags}" == "1" && "${tok}" == "--" ]]; then
+          parsing_flags=0
+          continue
+        fi
+        if [[ "${parsing_flags}" == "1" && "${tok}" =~ ^-[a-zA-Z]+$ ]]; then
+          if [[ "${tok}" =~ [rR] ]]; then has_r=1; fi
+          if [[ "${tok}" =~ f ]]; then has_f=1; fi
+        else
+          parsing_flags=0
+          targets+=("${tok}")
+        fi
+      done
+
+      if [[ "${has_r}" == "1" && "${has_f}" == "1" ]]; then
+        if [[ "${#targets[@]}" -eq 0 ]]; then
+          printf 'rm -rf with no target: %s\n' "${stmt}"
+          return 1
+        fi
+        local t
+        for t in "${targets[@]}"; do
+          if [[ ! "${t}" =~ ^\"(\$HOME|\$\{HOME\}) ]]; then
+            printf '%s\n' "${t}"
+            return 1
+          fi
+        done
+      fi
+    done <<< "${clean_line}"
+  done <<< "${text}"
+  return 0
+}
+
+check_write_targets() {
+  local script_text="${1}"
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" =~ (>|>>)[[:space:]]*[\"\']?(\/[^[:space:]\"\'>]+) ]]; then
+      local redir_path="${BASH_REMATCH[2]}"
+      if [[ ! "${redir_path}" =~ ^/tmp(/|$) && ! "${redir_path}" =~ ^/dev/(null|zero|stdout|stderr|fd/.*) ]]; then
+        printf 'redirection to %s\n' "${redir_path}"
+        return 1
+      fi
+    fi
+  done <<< "${script_text}"
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    local clean_line
+    clean_line="$(printf '%s\n' "${line}" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+    local stmt
+    while IFS= read -r stmt || [[ -n "${stmt}" ]]; do
+      stmt="$(printf '%s\n' "${stmt}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      if [[ -z "${stmt}" ]]; then continue; fi
+
+      local -a tokens=()
+      local cur="" in_quote="" i len="${#stmt}"
+      for (( i=0; i<len; i++ )); do
+        local c="${stmt:i:1}"
+        if [[ -z "${in_quote}" ]]; then
+          if [[ "${c}" == '"' || "${c}" == "'" ]]; then
+            in_quote="${c}"
+            cur="${cur}${c}"
+          elif [[ "${c}" =~ [[:space:]] ]]; then
+            if [[ -n "${cur}" ]]; then tokens+=("${cur}"); cur=""; fi
+          else
+            cur="${cur}${c}"
+          fi
+        else
+          cur="${cur}${c}"
+          if [[ "${c}" == "${in_quote}" ]]; then in_quote=""; fi
+        fi
+      done
+      if [[ -n "${cur}" ]]; then tokens+=("${cur}"); fi
+
+      if [[ "${#tokens[@]}" -eq 0 ]]; then continue; fi
+      local cmd
+      cmd="$(basename "${tokens[0]}")"
+
+      case "${cmd}" in
+        tee)
+          local j
+          for (( j=1; j<${#tokens[@]}; j++ )); do
+            local tok="${tokens[j]}"
+            if [[ "${tok}" == -* ]]; then continue; fi
+            local raw="${tok#[\"\']}"
+            raw="${raw%[\"\']}"
+            if [[ "${raw}" == /* ]]; then
+              if [[ ! "${raw}" =~ ^/tmp(/|$) && ! "${raw}" =~ ^/dev/(null|zero|stdout|stderr|fd/.*) ]]; then
+                printf 'tee target %s\n' "${raw}"
+                return 1
+              fi
+            fi
+          done
+          ;;
+        mkdir)
+          local j
+          for (( j=1; j<${#tokens[@]}; j++ )); do
+            local tok="${tokens[j]}"
+            if [[ "${tok}" == -* ]]; then continue; fi
+            local raw="${tok#[\"\']}"
+            raw="${raw%[\"\']}"
+            if [[ "${raw}" == /* ]]; then
+              if [[ ! "${raw}" =~ ^/tmp(/|$) ]]; then
+                printf 'mkdir target %s\n' "${raw}"
+                return 1
+              fi
+            fi
+          done
+          ;;
+        cp|mv|install)
+          local target=""
+          local j
+          local -a positional=()
+          for (( j=1; j<${#tokens[@]}; j++ )); do
+            local tok="${tokens[j]}"
+            if [[ "${tok}" == "-t" && $((j + 1)) -lt ${#tokens[@]} ]]; then
+              target="${tokens[$((j + 1))]}"
+              break
+            elif [[ "${tok}" == --target=* ]]; then
+              target="${tok#--target=}"
+              break
+            elif [[ "${tok}" == -* ]]; then
+              continue
+            else
+              positional+=("${tok}")
+            fi
+          done
+          if [[ -z "${target}" && "${#positional[@]}" -ge 2 ]]; then
+            target="${positional[-1]}"
+          fi
+          if [[ -n "${target}" ]]; then
+            local raw="${target#[\"\']}"
+            raw="${raw%[\"\']}"
+            if [[ "${raw}" == /* ]]; then
+              if [[ ! "${raw}" =~ ^/tmp(/|$) && ! "${raw}" =~ ^/dev/(null|zero|stdout|stderr|fd/.*) ]]; then
+                printf '%s destination %s\n' "${cmd}" "${raw}"
+                return 1
+              fi
+            fi
+          fi
+          ;;
+      esac
+    done <<< "${clean_line}"
+  done <<< "${script_text}"
+  return 0
+}
+
+check_forbidden_patterns() {
+  local slug="${1}"
+  local script_file="${2}"
+  local risk="${3}"
+
+  local stripped
+  stripped="$(strip_shell_comments "${script_file}")"
+
+  # 1. eval
+  if printf '%s\n' "${stripped}" | grep -q -w 'eval'; then
+    printf 'FAIL %s: forbidden pattern: word-boundary eval\n' "${slug}"
+    return 1
+  fi
+
+  # 2. fetch-and-execute
+  if printf '%s\n' "${stripped}" | grep -q -E '(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?([a-zA-Z0-9_/-]*(env[[:space:]]+|\/))?(ba|z)?sh\b'; then
+    printf 'FAIL %s: forbidden pattern: fetch-and-execute (curl/wget piped to shell)\n' "${slug}"
+    return 1
+  fi
+
+  # 3. rm -rf scoping
+  local rm_target=""
+  if ! rm_target="$(check_rm_rf_targets "${stripped}")"; then
+    printf 'FAIL %s: forbidden pattern: un-scoped rm -rf target (%s)\n' "${slug}" "${rm_target}"
+    return 1
+  fi
+
+  # 4. sudo or pkexec in risk: low
+  if [[ "${risk}" == "low" ]]; then
+    if printf '%s\n' "${stripped}" | grep -q -w -E 'sudo|pkexec'; then
+      printf 'FAIL %s: forbidden pattern: sudo or pkexec in risk: low module\n' "${slug}"
+      return 1
+    fi
+  fi
+
+  # 5. shellcheck unquoted expansions
+  if command -v shellcheck >/dev/null 2>&1; then
+    local sc_out
+    sc_out="$(shellcheck -f gcc "${script_file}" 2>&1 || true)"
+    if printf '%s\n' "${sc_out}" | grep -q 'SC2086'; then
+      printf 'FAIL %s: forbidden pattern: unquoted variable expansion (SC2086)\n' "${slug}"
+      return 1
+    fi
+    while IFS= read -r sc_line; do
+      if [[ -n "${sc_line}" ]]; then
+        printf 'advisory: %s: shellcheck: %s\n' "${slug}" "${sc_line}"
+      fi
+    done <<< "${sc_out}"
+  else
+    printf 'advisory: shellcheck not found; unquoted variable expansion check skipped for %s\n' "${slug}"
+  fi
+
+  # 6. literal absolute write targets outside $HOME and /tmp
+  local write_target=""
+  if ! write_target="$(check_write_targets "${stripped}")"; then
+    if [[ "${risk}" == "low" ]]; then
+      printf 'FAIL %s: forbidden pattern: literal absolute write target outside $HOME and /tmp (%s)\n' "${slug}" "${write_target}"
+      return 1
+    else
+      printf 'advisory: %s: literal absolute write target outside $HOME and /tmp (%s)\n' "${slug}" "${write_target}"
+    fi
+  fi
+
+  return 0
+}
+
 lint_module() {
   local slug="${1}"
   local module_dir="${MODULES_DIR}/${slug}"
@@ -81,7 +379,12 @@ lint_module() {
     return 1
   fi
 
-  # Create sandbox for action execution
+  # Check 3 — Forbidden patterns (spec §5.3)
+  if ! check_forbidden_patterns "${slug}" "${script_file}" "${MANIFEST_RISK}"; then
+    return 1
+  fi
+
+  # Checks 4+5 — Sandbox execution (spec §5.4-5.5)
   local sandbox_root
   sandbox_root="$(mktemp -d "${TMPDIR:-/tmp}/modulelint-sandbox.XXXXXXXX")"
   # shellcheck disable=SC2064
