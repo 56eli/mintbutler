@@ -3,7 +3,7 @@ set -euo pipefail
 
 # lib/menu.sh — module scan, light validation, (order, slug) sort,
 # numbered rendering incl. broken section; search-filter support.
-# Expects lib/ui.sh and lib/manifest.sh to be sourced first.
+# Expects lib/ui.sh, lib/manifest.sh, and lib/picker.sh to be sourced first.
 
 MENU_SLUGS=()
 MENU_TITLES=()
@@ -14,6 +14,7 @@ MENU_DESCS=()
 MENU_BROKEN_SLUGS=()
 MENU_MODULES_DIR=""
 MENU_FILTER=""
+MENU_PAGE_SIZE=10
 
 menu_set_filter() {
   MENU_FILTER="${1:-}"
@@ -153,25 +154,40 @@ menu_count() {
   printf '%s\n' "${count}"
 }
 
+menu_total_pages() {
+  local count
+  count="$(menu_count)"
+  picker_compute_total_pages "${count}" "${MENU_PAGE_SIZE}"
+}
+
 menu_slug_for_number() {
   local want="${1:-}"
-  local count="0" i
-  if [[ ! "${want}" =~ ^[0-9]+$ ]]; then
+  local page="${2:-1}"
+  local page_size="${MENU_PAGE_SIZE:-10}"
+  if [[ ! "${want}" =~ ^[0-9]+$ ]] || (( want < 1 )); then
     return 1
   fi
-  if [[ "${want}" -lt 1 ]]; then
-    return 1
-  fi
+  local -a matching=()
+  local i
   for i in "${!MENU_SLUGS[@]}"; do
     if _menu_matches_filter "${MENU_SLUGS[${i}]}" "${MENU_TITLES[${i}]}"; then
-      count=$((count + 1))
-      if [[ "${count}" == "${want}" ]]; then
-        printf '%s\n' "${MENU_SLUGS[${i}]}"
-        return 0
-      fi
+      matching+=("${i}")
     fi
   done
-  return 1
+  local count="${#matching[@]}"
+  local start_idx=$(( (page - 1) * page_size ))
+  local end_idx=$(( start_idx + page_size ))
+  if (( end_idx > count )); then
+    end_idx="${count}"
+  fi
+  local page_items=$(( end_idx - start_idx ))
+  if (( want > page_items )); then
+    return 1
+  fi
+  local target_idx=$(( start_idx + want - 1 ))
+  local slug_idx="${matching[target_idx]}"
+  printf '%s\n' "${MENU_SLUGS[slug_idx]}"
+  return 0
 }
 
 menu_title_for_slug() {
@@ -208,30 +224,59 @@ menu_undo_for_slug() {
 }
 
 menu_render() {
+  local page="${1:-1}"
+  local page_size="${MENU_PAGE_SIZE:-10}"
+
+  local -a matching=()
+  local i
+  for i in "${!MENU_SLUGS[@]}"; do
+    if _menu_matches_filter "${MENU_SLUGS[${i}]}" "${MENU_TITLES[${i}]}"; then
+      matching+=("${i}")
+    fi
+  done
+
+  local count="${#matching[@]}"
+  local total_pages
+  total_pages="$(picker_compute_total_pages "${count}" "${page_size}")"
+  if (( page > total_pages )); then
+    page="${total_pages}"
+  fi
+  if (( page < 1 )); then
+    page=1
+  fi
+
   ui_heading "mintbutler — Tasks:"
   printf '\n'
-  local num="0" i shown="0"
-  for i in "${!MENU_SLUGS[@]}"; do
-    if ! _menu_matches_filter "${MENU_SLUGS[${i}]}" "${MENU_TITLES[${i}]}"; then
-      continue
-    fi
-    num=$((num + 1))
-    shown="1"
-    printf '  %s) %s' "${num}" "${MENU_TITLES[${i}]}"
-    if [[ "${MENU_RISKS[${i}]}" == "elevated" ]]; then
-      printf '  '
-      ui_risk_badge "elevated"
-    fi
-    printf '\n'
-  done
-  if [[ "${shown}" == "0" ]]; then
+
+  local start_idx=$(( (page - 1) * page_size ))
+  local end_idx=$(( start_idx + page_size ))
+  if (( end_idx > count )); then
+    end_idx="${count}"
+  fi
+
+  local shown="0"
+  if (( count == 0 )); then
     if [[ -n "${MENU_FILTER}" ]]; then
       printf '  (no matches)\n'
     elif [[ "${#MENU_BROKEN_SLUGS[@]}" -eq 0 ]]; then
       printf '  (no modules found)\n'
     fi
+  else
+    local k num=0 idx
+    for (( k=start_idx; k<end_idx; k++ )); do
+      num=$(( num + 1 ))
+      shown="1"
+      idx="${matching[k]}"
+      printf '  %s) %s' "${num}" "${MENU_TITLES[idx]}"
+      if [[ "${MENU_RISKS[idx]}" == "elevated" ]]; then
+        printf '  '
+        ui_risk_badge "elevated"
+      fi
+      printf '\n'
+    done
   fi
-  if [[ "${#MENU_BROKEN_SLUGS[@]}" -gt 0 ]]; then
+
+  if [[ "${#MENU_BROKEN_SLUGS[@]}" -gt 0 && ( page -eq total_pages || total_pages -eq 1 ) ]]; then
     if [[ "${shown}" == "1" ]]; then
       printf '\n'
     fi

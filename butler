@@ -21,6 +21,10 @@ if [[ ! -f "${LIB_DIR}/confirm.sh" ]]; then
   printf 'Error: missing lib/confirm.sh\n' >&2
   exit 1
 fi
+if [[ ! -f "${LIB_DIR}/picker.sh" ]]; then
+  printf 'Error: missing lib/picker.sh\n' >&2
+  exit 1
+fi
 if [[ ! -f "${LIB_DIR}/menu.sh" ]]; then
   printf 'Error: missing lib/menu.sh\n' >&2
   exit 1
@@ -32,6 +36,8 @@ source "${LIB_DIR}/ui.sh"
 source "${LIB_DIR}/manifest.sh"
 # shellcheck source=lib/confirm.sh
 source "${LIB_DIR}/confirm.sh"
+# shellcheck source=lib/picker.sh
+source "${LIB_DIR}/picker.sh"
 # shellcheck source=lib/menu.sh
 source "${LIB_DIR}/menu.sh"
 
@@ -60,6 +66,7 @@ Usage:
 
 Interactive keys:
   <number>  Open a task
+  n / p     Next / previous page
   /search   Filter tasks (case-insensitive); / alone clears
   r         Refresh (rescan modules)
   q         Quit
@@ -318,17 +325,28 @@ butler_detail() {
 }
 
 butler_interactive() {
+  local current_page=1
   MENU_FILTER=""
   menu_clear_filter
   while true; do
     menu_scan "${MODULES_DIR}"
-    menu_render
-    printf 'Select a task number (or: q quit  /search  r refresh): '
-    local input=""
+    local total_pages
+    total_pages="$(menu_total_pages)"
+    if (( current_page > total_pages )); then
+      current_page="${total_pages}"
+    fi
+    if (( current_page < 1 )); then
+      current_page=1
+    fi
+
+    menu_render "${current_page}"
+    printf 'Select a task number (or: n next  p prev  /search  r refresh  q quit): '
+    local input="" cr=$'\r'
     if ! IFS= read -r input; then
       printf '\n'
       exit 0
     fi
+    input="${input%"$cr"}"
     input="$(_butler_trim "${input}")"
     if [[ -z "${input}" ]]; then
       continue
@@ -337,11 +355,25 @@ butler_interactive() {
       exit 0
     fi
     if [[ "${input}" == "r" || "${input}" == "R" ]]; then
+      current_page=1
+      continue
+    fi
+    if [[ "${input}" == "n" || "${input}" == "N" ]]; then
+      if (( current_page < total_pages )); then
+        current_page=$(( current_page + 1 ))
+      fi
+      continue
+    fi
+    if [[ "${input}" == "p" || "${input}" == "P" ]]; then
+      if (( current_page > 1 )); then
+        current_page=$(( current_page - 1 ))
+      fi
       continue
     fi
     if [[ "${input}" == "/" ]]; then
       MENU_FILTER=""
       menu_clear_filter
+      current_page=1
       continue
     fi
     if [[ "${input}" == "/"* ]]; then
@@ -349,18 +381,19 @@ butler_interactive() {
       f="$(_butler_trim "${f}")"
       MENU_FILTER="${f}"
       menu_set_filter "${f}"
+      current_page=1
       continue
     fi
     if [[ "${input}" =~ ^[0-9]+$ ]]; then
       local slug=""
-      if slug="$(menu_slug_for_number "${input}")"; then
+      if slug="$(menu_slug_for_number "${input}" "${current_page}")"; then
         butler_detail "${slug}"
       else
-        ui_error "No task numbered '${input}'."
+        ui_error "No task numbered '${input}' on this page."
       fi
       continue
     fi
-    ui_error "Unknown command '${input}'. Use a number, /search, r, or q."
+    ui_error "Unknown command '${input}'. Use a number, n, p, /search, r, or q."
   done
 }
 
