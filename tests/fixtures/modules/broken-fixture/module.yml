@@ -1,0 +1,6 @@
+title: Broken Fixture
+description: >-
+  Broken fixture has an invalid manifest.
+risk: low
+undo: true
+bogus: true
