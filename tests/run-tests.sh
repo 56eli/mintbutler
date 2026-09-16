@@ -145,6 +145,97 @@ else
   fi
 fi
 
+# Lint stages (g)–(j) in a separate stage directory with bin/ present.
+LINT_STAGE="${TMPBASE}/lint-stage"
+mkdir -p "${LINT_STAGE}"
+cp -a "${REPO_ROOT}/butler" "${LINT_STAGE}/"
+cp -a "${REPO_ROOT}/lib" "${LINT_STAGE}/"
+cp -a "${REPO_ROOT}/bin" "${LINT_STAGE}/"
+mkdir -p "${LINT_STAGE}/modules"
+cp -a "${REPO_ROOT}/tests/fixtures/modules/." "${LINT_STAGE}/modules/"
+chmod +x "${LINT_STAGE}/butler"
+chmod +x "${LINT_STAGE}/bin/modulelint"
+
+# Stage (g): bin/modulelint over all fixtures.
+printf 'Stage g: modulelint all fixtures\n'
+output_g=""
+code_g="0"
+output_g="$(cd "${LINT_STAGE}" && bin/modulelint 2>&1)" || code_g="$?"
+if [[ "${code_g}" -ne 1 ]]; then
+  fail "bin/modulelint exits 1 on fixtures (got ${code_g})"
+else
+  pass "bin/modulelint exits 1 on fixtures"
+fi
+for slug in alpha-fixture beta-fixture gamma-fixture; do
+  if printf '%s\n' "${output_g}" | grep -q "PASS ${slug}"; then
+    pass "bin/modulelint contains PASS ${slug}"
+  else
+    fail "bin/modulelint contains PASS ${slug}"
+  fi
+done
+if printf '%s\n' "${output_g}" | grep -q "FAIL broken-fixture"; then
+  pass "bin/modulelint contains FAIL broken-fixture"
+else
+  fail "bin/modulelint contains FAIL broken-fixture"
+fi
+
+# Stage (h): bin/modulelint alpha-fixture.
+printf 'Stage h: modulelint alpha-fixture\n'
+output_h=""
+code_h="0"
+output_h="$(cd "${LINT_STAGE}" && bin/modulelint alpha-fixture 2>&1)" || code_h="$?"
+if [[ "${code_h}" -ne 0 ]]; then
+  fail "bin/modulelint alpha-fixture exits 0 (got ${code_h})"
+else
+  pass "bin/modulelint alpha-fixture exits 0"
+fi
+if printf '%s\n' "${output_h}" | grep -q "PASS alpha-fixture"; then
+  pass "bin/modulelint alpha-fixture contains PASS alpha-fixture"
+else
+  fail "bin/modulelint alpha-fixture contains PASS alpha-fixture"
+fi
+
+# Stage (i): ./butler --scan in the lint stage.
+printf 'Stage i: butler --scan in lint stage\n'
+output_i=""
+code_i="0"
+output_i="$(cd "${LINT_STAGE}" && ./butler --scan 2>&1)" || code_i="$?"
+if [[ "${code_i}" -ne 1 ]]; then
+  fail "butler --scan exits 1 in lint stage (got ${code_i})"
+else
+  pass "butler --scan exits 1 in lint stage"
+fi
+if printf '%s\n' "${output_i}" | grep -q "FAIL broken-fixture"; then
+  pass "butler --scan output contains FAIL broken-fixture"
+else
+  fail "butler --scan output contains FAIL broken-fixture"
+fi
+
+# Stage (j): modulelint containment (stage directory and real HOME untouched).
+printf 'Stage j: modulelint containment\n'
+FAKE_REAL_HOME="${TMPBASE}/real-home"
+FAKE_REAL_HOME_BEFORE="${TMPBASE}/real-home-before"
+mkdir -p "${FAKE_REAL_HOME}"
+printf 'real-home-sentinel\n' > "${FAKE_REAL_HOME}/sentinel.txt"
+cp -a "${FAKE_REAL_HOME}" "${FAKE_REAL_HOME_BEFORE}"
+
+LINT_STAGE_BEFORE="${TMPBASE}/lint-stage-before"
+cp -a "${LINT_STAGE}" "${LINT_STAGE_BEFORE}"
+
+(cd "${LINT_STAGE}" && HOME="${FAKE_REAL_HOME}" bin/modulelint >/dev/null 2>&1) || true
+
+if diff -r "${LINT_STAGE}" "${LINT_STAGE_BEFORE}" >/dev/null 2>&1; then
+  pass "modulelint leaves stage directory untouched"
+else
+  fail "modulelint modified stage directory"
+fi
+
+if diff -r "${FAKE_REAL_HOME}" "${FAKE_REAL_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "modulelint leaves real HOME untouched"
+else
+  fail "modulelint modified real HOME"
+fi
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
