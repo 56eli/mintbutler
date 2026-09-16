@@ -13,23 +13,24 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | Seq | Prompt path | Task | Agent branch | PR | Status |
 |---|---|---|---|---|---|
 | 001 | .orchestrator/prompts/001-butler-core-discovery.md | butler core: menu script, module discovery, flags, tracker bootstrap | arena/01a0ac05-mintbutler (session-pinned; deviation disclosed) | #1 | Merged 2026-09-16 (merge commit f0eb800) |
-| 002 | .orchestrator/prompts/002-bin-modulelint.md | bin/modulelint contract validator | arena/01a0ac22-mintbutler (pinned; substitution recorded per §4 fact 10) | #2 | Reviewed 2026-09-16 — MERGE advised, awaiting operator merge |
+| 002 | .orchestrator/prompts/002-bin-modulelint.md | bin/modulelint contract validator | arena/01a0ac22-mintbutler (pinned; substitution recorded per §4 fact 10) | #2 | Merged 2026-09-16 (merge commit 4eeac97) |
+| 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | seed module desktop-shortcut-creator + lib/ask.sh | feature/desktop-shortcut-creator (or pinned session branch) | — | Dispatched 2026-09-16 |
 
 ## Active Milestone
 v0.1 — menu script + module discovery + modulelint + the two seed modules.
 
 ## Task Queue
 - [x] PR #1: butler core + discovery + PROJECT_STATE.md bootstrap (Merged 2026-09-16)
-- [ ] PR #2: bin/modulelint contract validator (Open — MERGE advised 2026-09-16)
-- [ ] 003: seed module desktop-shortcut-creator (Pending — next; author AFTER #2 merges: touches tracker path #2 edits; introduces module-side ask helper)
-- [ ] 004: seed module android-file-transfer (Pending; first elevated path)
+- [x] PR #2: bin/modulelint contract validator (Merged 2026-09-16)
+- [ ] 003: seed module desktop-shortcut-creator + lib/ask.sh (In Progress — dispatched 2026-09-16)
+- [ ] 004: seed module android-file-transfer (Pending — next; first elevated path; planned order: 10 so it lists before desktop-shortcut-creator's 20, matching the README example)
 
 ## Interrupted Work
 - none
 
 ## Deferred / Technical Debt
 - CI workflow deferred by owner (2026-09-16); revisit after v0.1.
-- Module-side ask/elevate helpers deferred to task 003 (first consumer).
+- Module-side `ask` helper ships with task 003 (in flight); `elevate` helper ships with task 004 (first elevated consumer).
 - LICENSE file not yet requested.
 - v0.2 features (categories, favorites) deferred until v0.1 is proven on the owner's machine.
 
