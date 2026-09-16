@@ -335,6 +335,33 @@ check_forbidden_patterns() {
   return 0
 }
 
+check_strace_containment() {
+  local log_file="${1}"
+  local sandbox_dir="${2}"
+  if [[ ! -f "${log_file}" ]]; then
+    return 0
+  fi
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    local is_write=0
+    if [[ "${line}" =~ (open|openat)\( ]] && [[ "${line}" =~ (O_WRONLY|O_RDWR|O_CREAT|O_TRUNC) ]]; then
+      is_write=1
+    elif [[ "${line}" =~ (creat|unlink|unlinkat|rename|renameat|mkdir|mkdirat|rmdir|link|linkat|symlink|symlinkat)\( ]]; then
+      is_write=1
+    fi
+    if [[ "${is_write}" -eq 1 ]]; then
+      if [[ "${line}" =~ \"([^\"]+)\" ]]; then
+        local p="${BASH_REMATCH[1]}"
+        if [[ ! "${p}" =~ ^${sandbox_dir}(/|$) && ! "${p}" =~ ^/tmp(/|$) && ! "${p}" =~ ^/dev/(null|zero|stdout|stderr|fd/.*|pts/.*) ]]; then
+          printf '%s\n' "${p}"
+          return 1
+        fi
+      fi
+    fi
+  done < "${log_file}"
+  return 0
+}
+
 lint_module() {
   local slug="${1}"
   local module_dir="${MODULES_DIR}/${slug}"
@@ -453,7 +480,8 @@ lint_module() {
     return 1
   fi
 
-  # Execute dry-run
+  # Execute dry-run (snapshot before, diff after, verify non-empty plan)
+  cp -a "${sandbox_home}" "${sandbox_root}/home-snap-dry-run"
   local dry_code=0
   run_action "dry-run" || dry_code="$?"
   if [[ "${dry_code}" -eq 124 ]]; then
@@ -464,10 +492,51 @@ lint_module() {
     printf "FAIL %s: action 'dry-run' exited with code %d\n" "${slug}" "${dry_code}"
     return 1
   fi
+  local dry_out=""
+  if [[ -f "${sandbox_root}/dry-run.stdout" ]]; then
+    dry_out="$(cat "${sandbox_root}/dry-run.stdout")"
+  fi
+  local trimmed_plan
+  trimmed_plan="$(trim_string "${dry_out}")"
+  if [[ -z "${trimmed_plan}" ]]; then
+    printf "FAIL %s: action 'dry-run' produced empty plan\n" "${slug}"
+    return 1
+  fi
+  if ! diff -r "${sandbox_home}" "${sandbox_root}/home-snap-dry-run" >/dev/null 2>&1; then
+    printf "FAIL %s: action 'dry-run' modified sandbox HOME\n" "${slug}"
+    return 1
+  fi
+  rm -rf "${sandbox_root}/home-snap-dry-run"
 
   # Execute run
+  local strace_log="${sandbox_root}/strace-run.log"
+  local use_strace=0
+  if command -v strace >/dev/null 2>&1; then
+    use_strace=1
+  else
+    printf 'advisory: strace not found; write syscall containment check skipped for %s\n' "${slug}"
+  fi
+
   local run_code=0
-  run_action "run" || run_code="$?"
+  if [[ "${use_strace}" -eq 1 ]]; then
+    (
+      cd "${REPO_ROOT}"
+      HOME="${sandbox_home}" \
+      XDG_DATA_HOME="${sandbox_home}/.local/share" \
+      XDG_CONFIG_HOME="${sandbox_home}/.config" \
+      XDG_STATE_HOME="${sandbox_home}/.local/state" \
+      XDG_CACHE_HOME="${sandbox_home}/.cache" \
+      MINTBUTLER_MODULE_DIR="${module_dir}" \
+      MINTBUTLER_MODULE_SLUG="${slug}" \
+      MINTBUTLER_LIB_DIR="${LIB_DIR}" \
+      "${timeout_cmd[@]}" strace -f -s 1024 -o "${strace_log}" \
+        -e trace=open,openat,creat,unlink,unlinkat,rename,renameat,mkdir,mkdirat,rmdir,link,linkat,symlink,symlinkat \
+        bash "${script_file}" "run" < /dev/null > "${sandbox_root}/run.stdout" 2> "${sandbox_root}/run.stderr"
+    ) || run_code="$?"
+  else
+    run_action "run" || run_code="$?"
+  fi
+
   if [[ "${run_code}" -eq 124 ]]; then
     printf "FAIL %s: action 'run' timed out after 30s\n" "${slug}"
     return 1
@@ -481,6 +550,14 @@ lint_module() {
     trimmed_err="$(trim_string "${run_err}")"
     if [[ -z "${trimmed_err}" ]]; then
       printf "FAIL %s: action 'run' failed with exit code %d but produced no stderr explanation\n" "${slug}" "${run_code}"
+      return 1
+    fi
+  fi
+
+  if [[ "${use_strace}" -eq 1 ]]; then
+    local leaked_path=""
+    if ! leaked_path="$(check_strace_containment "${strace_log}" "${sandbox_root}")"; then
+      printf "FAIL %s: action 'run' attempted write outside sandbox (%s)\n" "${slug}" "${leaked_path}"
       return 1
     fi
   fi
