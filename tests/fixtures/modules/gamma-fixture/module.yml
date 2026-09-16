@@ -1,0 +1,5 @@
+title: Gamma Fixture
+description: >-
+  Gamma fixture does nothing safely for testing.
+risk: low
+undo: true

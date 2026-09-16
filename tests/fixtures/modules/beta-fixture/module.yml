@@ -1,0 +1,9 @@
+title: Beta Fixture
+description: >-
+  Beta fixture does nothing safely for testing.
+  Package installs are not cleanly undoable; this module says so instead of pretending.
+risk: elevated
+undo: false
+needs: []
+order: 1
+platform: mint-22

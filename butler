@@ -1,0 +1,468 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# butler — mintbutler main menu script with module discovery.
+# Zero writes: scans, renders, dispatches only.
+
+BUTLER_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LIB_DIR="${BUTLER_DIR}/lib"
+MODULES_DIR="${BUTLER_DIR}/modules"
+REPO_ROOT="${BUTLER_DIR}"
+
+if [[ ! -f "${LIB_DIR}/ui.sh" ]]; then
+  printf 'Error: missing lib/ui.sh\n' >&2
+  exit 1
+fi
+if [[ ! -f "${LIB_DIR}/manifest.sh" ]]; then
+  printf 'Error: missing lib/manifest.sh\n' >&2
+  exit 1
+fi
+if [[ ! -f "${LIB_DIR}/confirm.sh" ]]; then
+  printf 'Error: missing lib/confirm.sh\n' >&2
+  exit 1
+fi
+if [[ ! -f "${LIB_DIR}/menu.sh" ]]; then
+  printf 'Error: missing lib/menu.sh\n' >&2
+  exit 1
+fi
+
+# shellcheck source=lib/ui.sh
+source "${LIB_DIR}/ui.sh"
+# shellcheck source=lib/manifest.sh
+source "${LIB_DIR}/manifest.sh"
+# shellcheck source=lib/confirm.sh
+source "${LIB_DIR}/confirm.sh"
+# shellcheck source=lib/menu.sh
+source "${LIB_DIR}/menu.sh"
+
+trap 'printf "\n"; exit 0' INT
+
+_butler_trim() {
+  local s="${1:-}"
+  # shellcheck disable=SC2295
+  s="${s#"${s%%[![:space:]]*}"}"
+  # shellcheck disable=SC2295
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "${s}"
+}
+
+butler_print_help() {
+  cat <<'HELP'
+mintbutler — trusted chore box
+
+Usage:
+  ./butler                        Interactive menu
+  ./butler --list                 List modules (slugs + titles)
+  ./butler --run <slug>           Run a module (shows plan, asks confirmation)
+  ./butler --run <slug> --dry-run Show what a module would do, changing nothing
+  ./butler --scan                 Run modulelint over all modules
+  ./butler --help                 Show this help
+
+Interactive keys:
+  <number>  Open a task
+  /search   Filter tasks (case-insensitive); / alone clears
+  r         Refresh (rescan modules)
+  q         Quit
+HELP
+}
+
+butler_dispatch() {
+  local slug="${1:-}"
+  local action="${2:-}"
+  if [[ ! "${slug}" =~ ^[a-z0-9-]+$ ]]; then
+    ui_error "Invalid module name."
+    return 1
+  fi
+  case "${action}" in
+    describe|plan|dry-run|run|undo)
+      ;;
+    *)
+      ui_error "Invalid action."
+      return 1
+      ;;
+  esac
+  local module_path="${MODULES_DIR}/${slug}/module.sh"
+  local module_dir="${MODULES_DIR}/${slug}"
+  if [[ ! -f "${module_path}" ]]; then
+    ui_error "Module '${slug}' is missing its script."
+    return 1
+  fi
+  local code="0"
+  (
+    cd "${REPO_ROOT}"
+    MINTBUTLER_MODULE_DIR="${module_dir}" \
+    MINTBUTLER_MODULE_SLUG="${slug}" \
+    MINTBUTLER_LIB_DIR="${LIB_DIR}" \
+    bash "${module_path}" "${action}"
+  ) || code="$?"
+  if [[ "${code}" -ne 0 ]]; then
+    ui_error "Module '${slug}' failed during '${action}'. See above for details."
+    return "${code}"
+  fi
+  return 0
+}
+
+butler_list() {
+  menu_scan "${MODULES_DIR}"
+  if [[ "${#MENU_SLUGS[@]}" -eq 0 && "${#MENU_BROKEN_SLUGS[@]}" -eq 0 ]]; then
+    printf '(no modules found)\n'
+    return 0
+  fi
+  local i
+  for i in "${!MENU_SLUGS[@]}"; do
+    if [[ "${MENU_RISKS[${i}]}" == "elevated" ]]; then
+      printf '%s: %s  ⚠ elevated\n' "${MENU_SLUGS[${i}]}" "${MENU_TITLES[${i}]}"
+    else
+      printf '%s: %s\n' "${MENU_SLUGS[${i}]}" "${MENU_TITLES[${i}]}"
+    fi
+  done
+  local b
+  for b in "${MENU_BROKEN_SLUGS[@]}"; do
+    printf '%s (broken — excluded)\n' "${b}"
+  done
+  return 0
+}
+
+butler_scan() {
+  local lint="${REPO_ROOT}/bin/modulelint"
+  if [[ -f "${lint}" ]]; then
+    if [[ -x "${lint}" ]]; then
+      exec "${lint}"
+    else
+      exec bash "${lint}"
+    fi
+  else
+    printf 'modulelint not found at bin/modulelint\n' >&2
+    return 1
+  fi
+}
+
+butler_run() {
+  local slug="${1:-}"
+  local dry_run="${2:-0}"
+  if [[ ! "${slug}" =~ ^[a-z0-9-]+$ ]]; then
+    ui_error "Module '${slug}' not found."
+    return 1
+  fi
+  menu_scan "${MODULES_DIR}"
+  local found="0" is_broken="0" i
+  for i in "${!MENU_SLUGS[@]}"; do
+    if [[ "${MENU_SLUGS[${i}]}" == "${slug}" ]]; then
+      found="1"
+      break
+    fi
+  done
+  if [[ "${found}" == "0" ]]; then
+    local b
+    for b in "${MENU_BROKEN_SLUGS[@]}"; do
+      if [[ "${b}" == "${slug}" ]]; then
+        is_broken="1"
+        break
+      fi
+    done
+    if [[ "${is_broken}" == "1" ]]; then
+      ui_error "Module '${slug}' is broken — excluded."
+      return 1
+    fi
+    ui_error "Module '${slug}' not found."
+    return 1
+  fi
+  local risk=""
+  risk="$(menu_risk_for_slug "${slug}")"
+  if [[ "${dry_run}" == "1" ]]; then
+    butler_dispatch "${slug}" "dry-run"
+    return "$?"
+  fi
+  if ! butler_dispatch "${slug}" "plan"; then
+    return 1
+  fi
+  if [[ "${risk}" == "elevated" ]]; then
+    if [[ ! -t 0 ]]; then
+      printf "Cannot confirm elevated module '%s' without a terminal; use --dry-run to preview.\n" "${slug}" >&2
+      return 1
+    fi
+    if ! confirm_typed_slug "${slug}"; then
+      printf 'Cancelled.\n'
+      return 1
+    fi
+  else
+    if ! confirm_yn "Run '${slug}'?"; then
+      printf 'Cancelled.\n'
+      return 1
+    fi
+  fi
+  butler_dispatch "${slug}" "run"
+  return "$?"
+}
+
+butler_pause_if_tty() {
+  if [[ -t 0 && -t 1 ]]; then
+    printf 'Press Enter to continue...'
+    IFS= read -r _butler_dummy || true
+  fi
+}
+
+butler_detail() {
+  local slug="${1:-}"
+  local manifest="${MODULES_DIR}/${slug}/module.yml"
+  if ! manifest_parse "${manifest}"; then
+    ui_error "Module '${slug}' is broken — excluded."
+    return 0
+  fi
+  local title="${MANIFEST_TITLE}"
+  local desc="${MANIFEST_DESCRIPTION}"
+  local risk="${MANIFEST_RISK}"
+  local undo="${MANIFEST_UNDO}"
+  while true; do
+    if [[ -t 1 ]]; then
+      if command -v clear >/dev/null 2>&1; then
+        clear
+      else
+        printf '\033[2J\033[H'
+      fi
+    fi
+    ui_heading "${title}"
+    printf '\n'
+    printf '%s\n' "${desc}"
+    printf '\n'
+    if [[ "${risk}" == "elevated" ]]; then
+      printf 'Risk: elevated  '
+      ui_risk_badge "elevated"
+      printf '\n'
+    else
+      printf 'Risk: low\n'
+    fi
+    if [[ "${undo}" == "true" ]]; then
+      printf 'Undo: available\n'
+    else
+      printf 'Undo: not available — the module description says so\n'
+    fi
+    printf '\n'
+    if [[ "${undo}" == "true" ]]; then
+      printf '[d]ry-run  [r]un  [u]ndo  [b]ack\n'
+    else
+      printf '[d]ry-run  [r]un  [b]ack\n'
+    fi
+    printf 'Choose an action: '
+    local action=""
+    if ! IFS= read -r action; then
+      printf '\n'
+      exit 0
+    fi
+    action="$(_butler_trim "${action}")"
+    if [[ -z "${action}" ]]; then
+      continue
+    fi
+    local lower=""
+    lower="$(printf '%s' "${action}" | tr '[:upper:]' '[:lower:]')"
+    case "${lower}" in
+      b|back)
+        return 0
+        ;;
+      q|quit|exit)
+        exit 0
+        ;;
+      d|dry-run|dryrun)
+        butler_dispatch "${slug}" "dry-run" || true
+        butler_pause_if_tty
+        ;;
+      r|run)
+        if ! butler_dispatch "${slug}" "plan"; then
+          butler_pause_if_tty
+          continue
+        fi
+        if [[ "${risk}" == "elevated" ]]; then
+          if ! confirm_typed_slug "${slug}"; then
+            printf 'Cancelled.\n'
+            butler_pause_if_tty
+            continue
+          fi
+        else
+          if ! confirm_yn "Run '${slug}'?"; then
+            printf 'Cancelled.\n'
+            butler_pause_if_tty
+            continue
+          fi
+        fi
+        butler_dispatch "${slug}" "run" || true
+        butler_pause_if_tty
+        ;;
+      u|undo)
+        if [[ "${undo}" != "true" ]]; then
+          ui_error "Undo is not available for this module."
+          butler_pause_if_tty
+          continue
+        fi
+        if [[ "${risk}" == "elevated" ]]; then
+          if ! confirm_typed_slug "${slug}"; then
+            printf 'Cancelled.\n'
+            butler_pause_if_tty
+            continue
+          fi
+        else
+          if ! confirm_yn "Undo '${slug}'?"; then
+            printf 'Cancelled.\n'
+            butler_pause_if_tty
+            continue
+          fi
+        fi
+        butler_dispatch "${slug}" "undo" || true
+        butler_pause_if_tty
+        ;;
+      *)
+        ui_error "Unknown action '${action}'. Use d, r, u, or b."
+        butler_pause_if_tty
+        ;;
+    esac
+  done
+}
+
+butler_interactive() {
+  MENU_FILTER=""
+  menu_clear_filter
+  while true; do
+    menu_scan "${MODULES_DIR}"
+    menu_render
+    printf 'Select a task number (or: q quit  /search  r refresh): '
+    local input=""
+    if ! IFS= read -r input; then
+      printf '\n'
+      exit 0
+    fi
+    input="$(_butler_trim "${input}")"
+    if [[ -z "${input}" ]]; then
+      continue
+    fi
+    if [[ "${input}" == "q" || "${input}" == "Q" ]]; then
+      exit 0
+    fi
+    if [[ "${input}" == "r" || "${input}" == "R" ]]; then
+      continue
+    fi
+    if [[ "${input}" == "/" ]]; then
+      MENU_FILTER=""
+      menu_clear_filter
+      continue
+    fi
+    if [[ "${input}" == "/"* ]]; then
+      local f="${input#/}"
+      f="$(_butler_trim "${f}")"
+      MENU_FILTER="${f}"
+      menu_set_filter "${f}"
+      continue
+    fi
+    if [[ "${input}" =~ ^[0-9]+$ ]]; then
+      local slug=""
+      if slug="$(menu_slug_for_number "${input}")"; then
+        butler_detail "${slug}"
+      else
+        ui_error "No task numbered '${input}'."
+      fi
+      continue
+    fi
+    ui_error "Unknown command '${input}'. Use a number, /search, r, or q."
+  done
+}
+
+butler_main() {
+  local do_list="0" do_scan="0" do_help="0" dry_run="0" run_slug=""
+  while [[ "$#" -gt 0 ]]; do
+    case "${1}" in
+      --list)
+        do_list="1"
+        shift
+        ;;
+      --scan)
+        do_scan="1"
+        shift
+        ;;
+      --help)
+        do_help="1"
+        shift
+        ;;
+      --dry-run)
+        dry_run="1"
+        shift
+        ;;
+      --run)
+        if [[ "$#" -lt 2 ]]; then
+          ui_error "Missing slug for --run."
+          exit 1
+        fi
+        if [[ -n "${run_slug}" ]]; then
+          ui_error "Duplicate --run."
+          exit 1
+        fi
+        if [[ "${2}" == -* ]]; then
+          ui_error "Missing slug for --run."
+          exit 1
+        fi
+        run_slug="${2}"
+        shift 2
+        ;;
+      --run=*)
+        if [[ -n "${run_slug}" ]]; then
+          ui_error "Duplicate --run."
+          exit 1
+        fi
+        run_slug="${1#--run=}"
+        if [[ -z "${run_slug}" ]]; then
+          ui_error "Missing slug for --run."
+          exit 1
+        fi
+        shift
+        ;;
+      --*)
+        ui_error "Unknown option '${1}'. See --help."
+        exit 1
+        ;;
+      -*)
+        ui_error "Unknown option '${1}'. See --help."
+        exit 1
+        ;;
+      *)
+        ui_error "Unknown argument '${1}'. See --help."
+        exit 1
+        ;;
+    esac
+  done
+
+  if [[ "${do_help}" == "1" ]]; then
+    butler_print_help
+    exit 0
+  fi
+
+  local actions="0"
+  if [[ "${do_list}" == "1" ]]; then
+    actions=$((actions + 1))
+  fi
+  if [[ "${do_scan}" == "1" ]]; then
+    actions=$((actions + 1))
+  fi
+  if [[ -n "${run_slug}" ]]; then
+    actions=$((actions + 1))
+  fi
+  if [[ "${actions}" -gt 1 ]]; then
+    ui_error "Only one of --list, --run, --scan at a time."
+    exit 1
+  fi
+  if [[ "${dry_run}" == "1" && -z "${run_slug}" ]]; then
+    ui_error "--dry-run requires --run."
+    exit 1
+  fi
+  if [[ "${do_list}" == "1" ]]; then
+    butler_list
+    exit 0
+  fi
+  if [[ "${do_scan}" == "1" ]]; then
+    butler_scan
+    exit "$?"
+  fi
+  if [[ -n "${run_slug}" ]]; then
+    butler_run "${run_slug}" "${dry_run}"
+    exit "$?"
+  fi
+  butler_interactive
+}
+
+butler_main "$@"

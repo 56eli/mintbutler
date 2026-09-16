@@ -1,0 +1,7 @@
+title: Alpha Fixture
+description: >-
+  Alpha fixture does nothing safely for testing.
+risk: low
+undo: true
+needs: []
+order: 10
