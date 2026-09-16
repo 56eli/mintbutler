@@ -17,6 +17,8 @@ fi
 # shellcheck source=lib/manifest.sh
 source "${LIB_DIR}/manifest.sh"
 
+TIMEOUT_ADVISED=0
+
 print_usage() {
   cat <<'USAGE'
 Usage:
@@ -24,6 +26,15 @@ Usage:
   bin/modulelint <slug>   Lint a single module by slug
   bin/modulelint --help   Show this help
 USAGE
+}
+
+trim_string() {
+  local s="${1:-}"
+  # shellcheck disable=SC2295
+  s="${s#"${s%%[![:space:]]*}"}"
+  # shellcheck disable=SC2295
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "${s}"
 }
 
 lint_module() {
@@ -57,6 +68,145 @@ lint_module() {
     printf 'FAIL %s: missing module.sh\n' "${slug}"
     return 1
   fi
+
+  if [[ ! -x "${script_file}" ]]; then
+    printf 'FAIL %s: module.sh is not executable\n' "${slug}"
+    return 1
+  fi
+
+  # Check 2 — Syntax check (spec §5.2)
+  local syntax_err
+  if ! syntax_err="$(bash -n "${script_file}" 2>&1)"; then
+    printf 'FAIL %s: syntax error in module.sh: %s\n' "${slug}" "${syntax_err}"
+    return 1
+  fi
+
+  # Create sandbox for action execution
+  local sandbox_root
+  sandbox_root="$(mktemp -d "${TMPDIR:-/tmp}/modulelint-sandbox.XXXXXXXX")"
+  # shellcheck disable=SC2064
+  trap "rm -rf '${sandbox_root}'" EXIT RETURN
+
+  local sandbox_home="${sandbox_root}/home"
+  mkdir -p "${sandbox_home}/.local/share"
+  mkdir -p "${sandbox_home}/.config"
+  mkdir -p "${sandbox_home}/.local/state"
+  mkdir -p "${sandbox_home}/.cache"
+
+  local timeout_cmd=()
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=(timeout 30)
+  else
+    if [[ "${TIMEOUT_ADVISED}" -eq 0 ]]; then
+      printf 'advisory: timeout binary not found; action timeout wrapper skipped\n'
+      TIMEOUT_ADVISED=1
+    fi
+  fi
+
+  # Helper to execute action in sandbox
+  run_action() {
+    local action="${1}"
+    local stdout_file="${sandbox_root}/${action}.stdout"
+    local stderr_file="${sandbox_root}/${action}.stderr"
+    local code=0
+
+    (
+      cd "${REPO_ROOT}"
+      HOME="${sandbox_home}" \
+      XDG_DATA_HOME="${sandbox_home}/.local/share" \
+      XDG_CONFIG_HOME="${sandbox_home}/.config" \
+      XDG_STATE_HOME="${sandbox_home}/.local/state" \
+      XDG_CACHE_HOME="${sandbox_home}/.cache" \
+      MINTBUTLER_MODULE_DIR="${module_dir}" \
+      MINTBUTLER_MODULE_SLUG="${slug}" \
+      MINTBUTLER_LIB_DIR="${LIB_DIR}" \
+      "${timeout_cmd[@]}" bash "${script_file}" "${action}" < /dev/null > "${stdout_file}" 2> "${stderr_file}"
+    ) || code="$?"
+
+    return "${code}"
+  }
+
+  # Execute describe
+  local describe_code=0
+  run_action "describe" || describe_code="$?"
+  if [[ "${describe_code}" -eq 124 ]]; then
+    printf "FAIL %s: action 'describe' timed out after 30s\n" "${slug}"
+    return 1
+  fi
+  if [[ "${describe_code}" -ne 0 ]]; then
+    printf "FAIL %s: action 'describe' exited with code %d\n" "${slug}" "${describe_code}"
+    return 1
+  fi
+
+  # Execute plan
+  local plan_code=0
+  run_action "plan" || plan_code="$?"
+  if [[ "${plan_code}" -eq 124 ]]; then
+    printf "FAIL %s: action 'plan' timed out after 30s\n" "${slug}"
+    return 1
+  fi
+  if [[ "${plan_code}" -ne 0 ]]; then
+    printf "FAIL %s: action 'plan' exited with code %d\n" "${slug}" "${plan_code}"
+    return 1
+  fi
+
+  # Execute dry-run
+  local dry_code=0
+  run_action "dry-run" || dry_code="$?"
+  if [[ "${dry_code}" -eq 124 ]]; then
+    printf "FAIL %s: action 'dry-run' timed out after 30s\n" "${slug}"
+    return 1
+  fi
+  if [[ "${dry_code}" -ne 0 ]]; then
+    printf "FAIL %s: action 'dry-run' exited with code %d\n" "${slug}" "${dry_code}"
+    return 1
+  fi
+
+  # Execute run
+  local run_code=0
+  run_action "run" || run_code="$?"
+  if [[ "${run_code}" -eq 124 ]]; then
+    printf "FAIL %s: action 'run' timed out after 30s\n" "${slug}"
+    return 1
+  fi
+  if [[ "${run_code}" -ne 0 ]]; then
+    local run_err=""
+    if [[ -f "${sandbox_root}/run.stderr" ]]; then
+      run_err="$(cat "${sandbox_root}/run.stderr")"
+    fi
+    local trimmed_err
+    trimmed_err="$(trim_string "${run_err}")"
+    if [[ -z "${trimmed_err}" ]]; then
+      printf "FAIL %s: action 'run' failed with exit code %d but produced no stderr explanation\n" "${slug}" "${run_code}"
+      return 1
+    fi
+  fi
+
+  # Execute undo (only if declared undo: true)
+  if [[ "${MANIFEST_UNDO}" == "true" ]]; then
+    local undo_code=0
+    run_action "undo" || undo_code="$?"
+    if [[ "${undo_code}" -eq 124 ]]; then
+      printf "FAIL %s: action 'undo' timed out after 30s\n" "${slug}"
+      return 1
+    fi
+    if [[ "${undo_code}" -ne 0 ]]; then
+      local undo_err=""
+      if [[ -f "${sandbox_root}/undo.stderr" ]]; then
+        undo_err="$(cat "${sandbox_root}/undo.stderr")"
+      fi
+      local trimmed_undo_err
+      trimmed_undo_err="$(trim_string "${undo_err}")"
+      if [[ -z "${trimmed_undo_err}" ]]; then
+        printf "FAIL %s: action 'undo' failed with exit code %d but produced no stderr explanation\n" "${slug}" "${undo_code}"
+        return 1
+      fi
+    fi
+  fi
+
+  # Cleanup sandbox
+  rm -rf "${sandbox_root}"
+  trap - EXIT RETURN
 
   printf 'PASS %s\n' "${slug}"
   return 0
