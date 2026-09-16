@@ -14,7 +14,7 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 |---|---|---|---|---|---|
 | 001 | .orchestrator/prompts/001-butler-core-discovery.md | butler core: menu script, module discovery, flags, tracker bootstrap | arena/01a0ac05-mintbutler (session-pinned; deviation disclosed) | #1 | Merged 2026-09-16 (merge commit f0eb800) |
 | 002 | .orchestrator/prompts/002-bin-modulelint.md | bin/modulelint contract validator | arena/01a0ac22-mintbutler (pinned; substitution recorded per §4 fact 10) | #2 | Merged 2026-09-16 (merge commit 4eeac97) |
-| 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | seed module desktop-shortcut-creator + lib/ask.sh | feature/desktop-shortcut-creator (or pinned session branch) | — | Dispatched 2026-09-16 |
+| 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | desktop-shortcut-creator v1: scan & place + custom modes, shared entry/picker libs, spec amendments, 23-line law | feature/shortcut-creator-v1 (or pinned session branch) | — | Republished 2026-09-16 with owner v1 rulings; dispatched |
 
 ## Active Milestone
 v0.1 — menu script + module discovery + modulelint + the two seed modules.
@@ -53,6 +53,7 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - Verification split: sandbox checks (syntax, shellcheck, harness, later modulelint) + owner manual acceptance on Mint 22.2.
 - desktop-shortcut-creator icon field: free text — icon file path or theme icon name; empty = system default (answer to structured question, 2026-09-16).
 - desktop-shortcut-creator name conflict: create alongside with `-N` version suffix, never overwrite (answer to structured question, 2026-09-16). Both rulings folded into prompt 003 pre-dispatch (amendment banner in file) and into its tracker deliverable.
+- Owner v1 rulings (2026-09-16, relayed via hub review): MODULE_SPEC §3 amended — bounded question series, budget declared as `asks: <n>` in the manifest, Enter skips optionals, confirmations stay with the menu, flows testable via scripted stdin; "No standing exceptions — docs never drift from reality." Two entry modes: Scan & place (default: scan user+system app dirs, paginated multi-select picker, one confirmation, trusted desktop copies, whole-set undo) and Custom (guided type/target/name/icon/terminal?/workdir?/desktop-copy sequence). New spec law (§4, enforced in suite): "No menu or submenu screen may exceed 23 terminal lines — ever"; pagination = entries page + one header + one footer (`n next / p prev / numbers / s search / q done`). Shared libs: lib/desktop-entry.sh (write→validate→trust→record; future appimage-installer reuses it) and lib/picker.sh (shared pagination footer per hub note). v1 quality items: Exec-quoting refuse-with-reason, end-of-run transparency (final entry content + offered test-launch), shadow warning vs /usr/share/applications. Out of scope: panel pinning; editing existing entries (future menu-entry-manager). All folded into prompt 003 amendment 2 pre-dispatch.
 
 ## Known Gaps
 - Sandboxes cannot verify real Mint desktop behavior (gvfs metadata trust flag, MTP) — owner acceptance covers those paths.
