@@ -45,6 +45,8 @@ needs: []                              # optional: packages needed beyond a
                                        # fresh Mint 22 install, e.g. [jmtpfs]
 order: 20                              # optional int; menu sorts by (order, slug);
                                        # omit → sorts after all ordered modules
+asks: 2                                  # optional int; the module's question
+                                         # budget (see §3); omit → 1
 platform: mint-22                      # optional: compat target; default mint-22
 ```
 
@@ -80,10 +82,7 @@ Conventions:
 - **No runtime command generation.** Scripts contain reviewed commands;
   they must not `eval`, fetch-and-execute (`curl … | bash`), or build
   command strings from input at runtime.
-- **No interactive prompts inside modules.** Confirmation is the menu's job
-  (lib helper); modules receive decisions, not questions. A module may ask
-  exactly one thing — a value only the user knows (e.g. an application
-  name) — via the provided `ask` helper.
+- A module may ask a short, BOUNDED series of questions, each collecting a value only the user knows. The question budget is declared in the manifest (`asks: <n>`). Optional values accept Enter to skip. Every safety confirmation (risk badge, run/undo, elevated) stays with the menu, never inside the module. Question flows must be testable non-interactively (scripted stdin).
 - **User-level first.** No `sudo`/`pkexec` in `risk: low`. `elevated`
   modules use the shared `elevate` helper only (single confirmed, displayed
   step), and only for what genuinely needs it (e.g. `apt-get install` of
@@ -108,7 +107,7 @@ Conventions:
     1) Android file transfer        ⚠ elevated
     2) Desktop shortcut creator
 
-  Select a task number (or: q quit  /search  r refresh):
+  Select a task number (or: n next  p prev  /search  r refresh  q quit):
   ```
 
 - On selection: clear screen, show `title`, `description`, risk badge, undo
@@ -119,6 +118,7 @@ Conventions:
 - Flags: `--list` (slugs + titles), `--run <slug>` (with `--dry-run`),
   `--scan` (run modulelint over all modules), `--help`.
 - `q`/Ctrl-C quit cleanly everywhere; `r` rescans.
+- **23-line law (enforced in the test suite):** no menu or submenu screen may exceed 23 terminal lines — ever. Screens that exceed the budget paginate: entries page + one header + one footer (`n next / p prev / numbers / s search / q done`).
 
 ## 5. Validation — `modulelint`
 
