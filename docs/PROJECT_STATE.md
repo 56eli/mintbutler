@@ -11,6 +11,7 @@ Canonical project tracker.
 - `docs/MODULE_SPEC.md` is the binding contract for `modules/` and the menu; the manifest YAML subset is limited to its §2 fields.
 - Menu numbers are positions recomputed at scan time; folder slugs are stable identities.
 - Owner acceptance commands must be non-destructive on a live Linux machine (owner ruling 2026-09-16).
+- Contract validation is mechanical: `bin/modulelint` enforces MODULE_SPEC §5 and reuses the menu's own `lib/manifest.sh` parser (single source of truth for manifests).
 
 ## 3. Settled Decisions & Rationale
 - Project name is `mintbutler` — confirmed by owner 2026-09-16; no rename.
@@ -19,5 +20,5 @@ Canonical project tracker.
 
 ## 4. Active Milestone & Current State
 - **Active Milestone:** v0.1 — menu script + module discovery + modulelint + the two seed modules.
-- **Current State:** specs complete (README, VISION, MODULE_SPEC); core menu script landed via PR for task 001.
-- **Immediate Next Task:** task 002 — `bin/modulelint` contract validator.
+- **Current State:** core menu script landed (PR #1, merged 2026-09-16); `bin/modulelint` contract validator landed via PR for task 002.
+- **Immediate Next Task:** task 003 — seed module `desktop-shortcut-creator` (risk: low, undo: true).

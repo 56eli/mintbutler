@@ -1,0 +1,657 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# bin/modulelint — the module contract validator for mintbutler.
+# Mechanically enforces MODULE_SPEC §5.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LIB_DIR="${REPO_ROOT}/lib"
+MODULES_DIR="${REPO_ROOT}/modules"
+
+if [[ ! -f "${LIB_DIR}/manifest.sh" ]]; then
+  printf 'Error: missing lib/manifest.sh\n' >&2
+  exit 1
+fi
+
+# shellcheck source=lib/manifest.sh
+source "${LIB_DIR}/manifest.sh"
+
+TIMEOUT_ADVISED=0
+
+print_usage() {
+  cat <<'USAGE'
+Usage:
+  bin/modulelint          Lint all modules in modules/
+  bin/modulelint <slug>   Lint a single module by slug
+  bin/modulelint --help   Show this help
+USAGE
+}
+
+trim_string() {
+  local s="${1:-}"
+  # shellcheck disable=SC2295
+  s="${s#"${s%%[![:space:]]*}"}"
+  # shellcheck disable=SC2295
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "${s}"
+}
+
+strip_shell_comments() {
+  local script_file="${1}"
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    local out="" in_quote="" i len="${#line}"
+    for (( i=0; i<len; i++ )); do
+      local c="${line:i:1}"
+      if [[ -z "${in_quote}" ]]; then
+        if [[ "${c}" == '"' || "${c}" == "'" ]]; then
+          in_quote="${c}"
+          out="${out}${c}"
+        elif [[ "${c}" == "#" ]]; then
+          if [[ "${i}" -eq 0 || "${line:i-1:1}" =~ [[:space:]] ]]; then
+            break
+          else
+            out="${out}${c}"
+          fi
+        else
+          out="${out}${c}"
+        fi
+      else
+        out="${out}${c}"
+        if [[ "${c}" == "${in_quote}" ]]; then
+          local esc=0 k=$((i-1))
+          while [[ "${k}" -ge 0 && "${line:k:1}" == '\' ]]; do
+            esc=$((esc + 1))
+            k=$((k - 1))
+          done
+          if [[ $((esc % 2)) -eq 0 ]]; then
+            in_quote=""
+          fi
+        fi
+      fi
+    done
+    printf '%s\n' "${out}"
+  done < "${script_file}"
+}
+
+check_rm_rf_targets() {
+  local text="${1}"
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    local clean_line
+    clean_line="$(printf '%s\n' "${line}" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+    local stmt
+    while IFS= read -r stmt || [[ -n "${stmt}" ]]; do
+      stmt="$(printf '%s\n' "${stmt}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      if [[ -z "${stmt}" ]]; then continue; fi
+
+      if [[ ! "${stmt}" =~ (^|[[:space:]])rm([[:space:]]|$) ]]; then continue; fi
+
+      local -a tokens=()
+      local cur="" in_quote="" i len="${#stmt}"
+      for (( i=0; i<len; i++ )); do
+        local c="${stmt:i:1}"
+        if [[ -z "${in_quote}" ]]; then
+          if [[ "${c}" == '"' || "${c}" == "'" ]]; then
+            in_quote="${c}"
+            cur="${cur}${c}"
+          elif [[ "${c}" =~ [[:space:]] ]]; then
+            if [[ -n "${cur}" ]]; then tokens+=("${cur}"); cur=""; fi
+          else
+            cur="${cur}${c}"
+          fi
+        else
+          cur="${cur}${c}"
+          if [[ "${c}" == "${in_quote}" ]]; then in_quote=""; fi
+        fi
+      done
+      if [[ -n "${cur}" ]]; then tokens+=("${cur}"); fi
+
+      local rm_idx=-1
+      local t_i
+      for (( t_i=0; t_i<${#tokens[@]}; t_i++ )); do
+        if [[ "$(basename "${tokens[t_i]}")" == "rm" ]]; then
+          rm_idx="${t_i}"
+          break
+        fi
+      done
+      if [[ "${rm_idx}" -eq -1 ]]; then continue; fi
+
+      local has_r=0 has_f=0
+      local -a targets=()
+      local parsing_flags=1
+      local j
+      for (( j=rm_idx+1; j<${#tokens[@]}; j++ )); do
+        local tok="${tokens[j]}"
+        if [[ "${parsing_flags}" == "1" && "${tok}" == "--" ]]; then
+          parsing_flags=0
+          continue
+        fi
+        if [[ "${parsing_flags}" == "1" && "${tok}" =~ ^-[a-zA-Z]+$ ]]; then
+          if [[ "${tok}" =~ [rR] ]]; then has_r=1; fi
+          if [[ "${tok}" =~ f ]]; then has_f=1; fi
+        else
+          parsing_flags=0
+          targets+=("${tok}")
+        fi
+      done
+
+      if [[ "${has_r}" == "1" && "${has_f}" == "1" ]]; then
+        if [[ "${#targets[@]}" -eq 0 ]]; then
+          printf 'rm -rf with no target: %s\n' "${stmt}"
+          return 1
+        fi
+        local t
+        for t in "${targets[@]}"; do
+          if [[ ! "${t}" =~ ^\"(\$HOME|\$\{HOME\}) ]]; then
+            printf '%s\n' "${t}"
+            return 1
+          fi
+        done
+      fi
+    done <<< "${clean_line}"
+  done <<< "${text}"
+  return 0
+}
+
+check_write_targets() {
+  local script_text="${1}"
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" =~ (>|>>)[[:space:]]*[\"\']?(\/[^[:space:]\"\'>]+) ]]; then
+      local redir_path="${BASH_REMATCH[2]}"
+      if [[ ! "${redir_path}" =~ ^/tmp(/|$) && ! "${redir_path}" =~ ^/dev/(null|zero|stdout|stderr|fd/.*) ]]; then
+        printf 'redirection to %s\n' "${redir_path}"
+        return 1
+      fi
+    fi
+  done <<< "${script_text}"
+
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    local clean_line
+    clean_line="$(printf '%s\n' "${line}" | sed -E 's/(&&|\|\||;|\|)/\n/g')"
+    local stmt
+    while IFS= read -r stmt || [[ -n "${stmt}" ]]; do
+      stmt="$(printf '%s\n' "${stmt}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+      if [[ -z "${stmt}" ]]; then continue; fi
+
+      local -a tokens=()
+      local cur="" in_quote="" i len="${#stmt}"
+      for (( i=0; i<len; i++ )); do
+        local c="${stmt:i:1}"
+        if [[ -z "${in_quote}" ]]; then
+          if [[ "${c}" == '"' || "${c}" == "'" ]]; then
+            in_quote="${c}"
+            cur="${cur}${c}"
+          elif [[ "${c}" =~ [[:space:]] ]]; then
+            if [[ -n "${cur}" ]]; then tokens+=("${cur}"); cur=""; fi
+          else
+            cur="${cur}${c}"
+          fi
+        else
+          cur="${cur}${c}"
+          if [[ "${c}" == "${in_quote}" ]]; then in_quote=""; fi
+        fi
+      done
+      if [[ -n "${cur}" ]]; then tokens+=("${cur}"); fi
+
+      if [[ "${#tokens[@]}" -eq 0 ]]; then continue; fi
+      local cmd
+      cmd="$(basename "${tokens[0]}")"
+
+      case "${cmd}" in
+        tee)
+          local j
+          for (( j=1; j<${#tokens[@]}; j++ )); do
+            local tok="${tokens[j]}"
+            if [[ "${tok}" == -* ]]; then continue; fi
+            local raw="${tok#[\"\']}"
+            raw="${raw%[\"\']}"
+            if [[ "${raw}" == /* ]]; then
+              if [[ ! "${raw}" =~ ^/tmp(/|$) && ! "${raw}" =~ ^/dev/(null|zero|stdout|stderr|fd/.*) ]]; then
+                printf 'tee target %s\n' "${raw}"
+                return 1
+              fi
+            fi
+          done
+          ;;
+        mkdir)
+          local j
+          for (( j=1; j<${#tokens[@]}; j++ )); do
+            local tok="${tokens[j]}"
+            if [[ "${tok}" == -* ]]; then continue; fi
+            local raw="${tok#[\"\']}"
+            raw="${raw%[\"\']}"
+            if [[ "${raw}" == /* ]]; then
+              if [[ ! "${raw}" =~ ^/tmp(/|$) ]]; then
+                printf 'mkdir target %s\n' "${raw}"
+                return 1
+              fi
+            fi
+          done
+          ;;
+        cp|mv|install)
+          local target=""
+          local j
+          local -a positional=()
+          for (( j=1; j<${#tokens[@]}; j++ )); do
+            local tok="${tokens[j]}"
+            if [[ "${tok}" == "-t" && $((j + 1)) -lt ${#tokens[@]} ]]; then
+              target="${tokens[$((j + 1))]}"
+              break
+            elif [[ "${tok}" == --target=* ]]; then
+              target="${tok#--target=}"
+              break
+            elif [[ "${tok}" == -* ]]; then
+              continue
+            else
+              positional+=("${tok}")
+            fi
+          done
+          if [[ -z "${target}" && "${#positional[@]}" -ge 2 ]]; then
+            target="${positional[-1]}"
+          fi
+          if [[ -n "${target}" ]]; then
+            local raw="${target#[\"\']}"
+            raw="${raw%[\"\']}"
+            if [[ "${raw}" == /* ]]; then
+              if [[ ! "${raw}" =~ ^/tmp(/|$) && ! "${raw}" =~ ^/dev/(null|zero|stdout|stderr|fd/.*) ]]; then
+                printf '%s destination %s\n' "${cmd}" "${raw}"
+                return 1
+              fi
+            fi
+          fi
+          ;;
+      esac
+    done <<< "${clean_line}"
+  done <<< "${script_text}"
+  return 0
+}
+
+check_forbidden_patterns() {
+  local slug="${1}"
+  local script_file="${2}"
+  local risk="${3}"
+
+  local stripped
+  stripped="$(strip_shell_comments "${script_file}")"
+
+  # 1. eval
+  if printf '%s\n' "${stripped}" | grep -q -w 'eval'; then
+    printf 'FAIL %s: forbidden pattern: word-boundary eval\n' "${slug}"
+    return 1
+  fi
+
+  # 2. fetch-and-execute
+  if printf '%s\n' "${stripped}" | grep -q -E '(curl|wget)[^|]*\|[[:space:]]*(sudo[[:space:]]+)?([a-zA-Z0-9_/-]*(env[[:space:]]+|\/))?(ba|z)?sh\b'; then
+    printf 'FAIL %s: forbidden pattern: fetch-and-execute (curl/wget piped to shell)\n' "${slug}"
+    return 1
+  fi
+
+  # 3. rm -rf scoping
+  local rm_target=""
+  if ! rm_target="$(check_rm_rf_targets "${stripped}")"; then
+    printf 'FAIL %s: forbidden pattern: un-scoped rm -rf target (%s)\n' "${slug}" "${rm_target}"
+    return 1
+  fi
+
+  # 4. sudo or pkexec in risk: low
+  if [[ "${risk}" == "low" ]]; then
+    if printf '%s\n' "${stripped}" | grep -q -w -E 'sudo|pkexec'; then
+      printf 'FAIL %s: forbidden pattern: sudo or pkexec in risk: low module\n' "${slug}"
+      return 1
+    fi
+  fi
+
+  # 5. shellcheck unquoted expansions
+  if command -v shellcheck >/dev/null 2>&1; then
+    local sc_out
+    sc_out="$(shellcheck -f gcc "${script_file}" 2>&1 || true)"
+    if printf '%s\n' "${sc_out}" | grep -q 'SC2086'; then
+      printf 'FAIL %s: forbidden pattern: unquoted variable expansion (SC2086)\n' "${slug}"
+      return 1
+    fi
+    while IFS= read -r sc_line; do
+      if [[ -n "${sc_line}" ]]; then
+        printf 'advisory: %s: shellcheck: %s\n' "${slug}" "${sc_line}"
+      fi
+    done <<< "${sc_out}"
+  else
+    printf 'advisory: shellcheck not found; unquoted variable expansion check skipped for %s\n' "${slug}"
+  fi
+
+  # 6. literal absolute write targets outside $HOME and /tmp
+  local write_target=""
+  if ! write_target="$(check_write_targets "${stripped}")"; then
+    if [[ "${risk}" == "low" ]]; then
+      printf 'FAIL %s: forbidden pattern: literal absolute write target outside $HOME and /tmp (%s)\n' "${slug}" "${write_target}"
+      return 1
+    else
+      printf 'advisory: %s: literal absolute write target outside $HOME and /tmp (%s)\n' "${slug}" "${write_target}"
+    fi
+  fi
+
+  return 0
+}
+
+check_strace_containment() {
+  local log_file="${1}"
+  local sandbox_dir="${2}"
+  if [[ ! -f "${log_file}" ]]; then
+    return 0
+  fi
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    local is_write=0
+    if [[ "${line}" =~ (open|openat)\( ]] && [[ "${line}" =~ (O_WRONLY|O_RDWR|O_CREAT|O_TRUNC) ]]; then
+      is_write=1
+    elif [[ "${line}" =~ (creat|unlink|unlinkat|rename|renameat|mkdir|mkdirat|rmdir|link|linkat|symlink|symlinkat)\( ]]; then
+      is_write=1
+    fi
+    if [[ "${is_write}" -eq 1 ]]; then
+      if [[ "${line}" =~ \"([^\"]+)\" ]]; then
+        local p="${BASH_REMATCH[1]}"
+        if [[ ! "${p}" =~ ^${sandbox_dir}(/|$) && ! "${p}" =~ ^/tmp(/|$) && ! "${p}" =~ ^/dev/(null|zero|stdout|stderr|fd/.*|pts/.*) ]]; then
+          printf '%s\n' "${p}"
+          return 1
+        fi
+      fi
+    fi
+  done < "${log_file}"
+  return 0
+}
+
+lint_module() {
+  local slug="${1}"
+  local module_dir="${MODULES_DIR}/${slug}"
+
+  # Check 1 — Manifest & slug (spec §5.1)
+  if [[ ! "${slug}" =~ ^[a-z0-9-]+$ ]]; then
+    printf 'FAIL %s: invalid slug name (must match ^[a-z0-9-]+$)\n' "${slug}"
+    return 1
+  fi
+
+  if [[ ! -d "${module_dir}" ]]; then
+    printf 'FAIL %s: module directory not found\n' "${slug}"
+    return 1
+  fi
+
+  local manifest_file="${module_dir}/module.yml"
+  if [[ ! -f "${manifest_file}" ]]; then
+    printf 'FAIL %s: missing module.yml\n' "${slug}"
+    return 1
+  fi
+
+  if ! manifest_parse "${manifest_file}"; then
+    printf 'FAIL %s: manifest error: %s\n' "${slug}" "${MANIFEST_ERROR}"
+    return 1
+  fi
+
+  local script_file="${module_dir}/module.sh"
+  if [[ ! -f "${script_file}" ]]; then
+    printf 'FAIL %s: missing module.sh\n' "${slug}"
+    return 1
+  fi
+
+  if [[ ! -x "${script_file}" ]]; then
+    printf 'FAIL %s: module.sh is not executable\n' "${slug}"
+    return 1
+  fi
+
+  # Check 2 — Syntax check (spec §5.2)
+  local syntax_err
+  if ! syntax_err="$(bash -n "${script_file}" 2>&1)"; then
+    printf 'FAIL %s: syntax error in module.sh: %s\n' "${slug}" "${syntax_err}"
+    return 1
+  fi
+
+  # Check 3 — Forbidden patterns (spec §5.3)
+  if ! check_forbidden_patterns "${slug}" "${script_file}" "${MANIFEST_RISK}"; then
+    return 1
+  fi
+
+  # Checks 4+5 — Sandbox execution (spec §5.4-5.5)
+  local sandbox_root
+  sandbox_root="$(mktemp -d "${TMPDIR:-/tmp}/modulelint-sandbox.XXXXXXXX")"
+  # shellcheck disable=SC2064
+  trap "rm -rf '${sandbox_root}'" EXIT RETURN
+
+  local sandbox_home="${sandbox_root}/home"
+  mkdir -p "${sandbox_home}/.local/share"
+  mkdir -p "${sandbox_home}/.config"
+  mkdir -p "${sandbox_home}/.local/state"
+  mkdir -p "${sandbox_home}/.cache"
+
+  local timeout_cmd=()
+  if command -v timeout >/dev/null 2>&1; then
+    timeout_cmd=(timeout 30)
+  else
+    if [[ "${TIMEOUT_ADVISED}" -eq 0 ]]; then
+      printf 'advisory: timeout binary not found; action timeout wrapper skipped\n'
+      TIMEOUT_ADVISED=1
+    fi
+  fi
+
+  # Helper to execute action in sandbox
+  run_action() {
+    local action="${1}"
+    local stdout_file="${sandbox_root}/${action}.stdout"
+    local stderr_file="${sandbox_root}/${action}.stderr"
+    local code=0
+
+    (
+      cd "${REPO_ROOT}"
+      HOME="${sandbox_home}" \
+      XDG_DATA_HOME="${sandbox_home}/.local/share" \
+      XDG_CONFIG_HOME="${sandbox_home}/.config" \
+      XDG_STATE_HOME="${sandbox_home}/.local/state" \
+      XDG_CACHE_HOME="${sandbox_home}/.cache" \
+      MINTBUTLER_MODULE_DIR="${module_dir}" \
+      MINTBUTLER_MODULE_SLUG="${slug}" \
+      MINTBUTLER_LIB_DIR="${LIB_DIR}" \
+      "${timeout_cmd[@]}" bash "${script_file}" "${action}" < /dev/null > "${stdout_file}" 2> "${stderr_file}"
+    ) || code="$?"
+
+    return "${code}"
+  }
+
+  # Execute describe
+  local describe_code=0
+  run_action "describe" || describe_code="$?"
+  if [[ "${describe_code}" -eq 124 ]]; then
+    printf "FAIL %s: action 'describe' timed out after 30s\n" "${slug}"
+    return 1
+  fi
+  if [[ "${describe_code}" -ne 0 ]]; then
+    printf "FAIL %s: action 'describe' exited with code %d\n" "${slug}" "${describe_code}"
+    return 1
+  fi
+
+  # Execute plan
+  local plan_code=0
+  run_action "plan" || plan_code="$?"
+  if [[ "${plan_code}" -eq 124 ]]; then
+    printf "FAIL %s: action 'plan' timed out after 30s\n" "${slug}"
+    return 1
+  fi
+  if [[ "${plan_code}" -ne 0 ]]; then
+    printf "FAIL %s: action 'plan' exited with code %d\n" "${slug}" "${plan_code}"
+    return 1
+  fi
+
+  # Execute dry-run (snapshot before, diff after, verify non-empty plan)
+  cp -a "${sandbox_home}" "${sandbox_root}/home-snap-dry-run"
+  local dry_code=0
+  run_action "dry-run" || dry_code="$?"
+  if [[ "${dry_code}" -eq 124 ]]; then
+    printf "FAIL %s: action 'dry-run' timed out after 30s\n" "${slug}"
+    return 1
+  fi
+  if [[ "${dry_code}" -ne 0 ]]; then
+    printf "FAIL %s: action 'dry-run' exited with code %d\n" "${slug}" "${dry_code}"
+    return 1
+  fi
+  local dry_out=""
+  if [[ -f "${sandbox_root}/dry-run.stdout" ]]; then
+    dry_out="$(cat "${sandbox_root}/dry-run.stdout")"
+  fi
+  local trimmed_plan
+  trimmed_plan="$(trim_string "${dry_out}")"
+  if [[ -z "${trimmed_plan}" ]]; then
+    printf "FAIL %s: action 'dry-run' produced empty plan\n" "${slug}"
+    return 1
+  fi
+  if ! diff -r "${sandbox_home}" "${sandbox_root}/home-snap-dry-run" >/dev/null 2>&1; then
+    printf "FAIL %s: action 'dry-run' modified sandbox HOME\n" "${slug}"
+    return 1
+  fi
+  rm -rf "${sandbox_root}/home-snap-dry-run"
+
+  # Execute run
+  local strace_log="${sandbox_root}/strace-run.log"
+  local use_strace=0
+  if command -v strace >/dev/null 2>&1; then
+    use_strace=1
+  else
+    printf 'advisory: strace not found; write syscall containment check skipped for %s\n' "${slug}"
+  fi
+
+  local run_code=0
+  if [[ "${use_strace}" -eq 1 ]]; then
+    (
+      cd "${REPO_ROOT}"
+      HOME="${sandbox_home}" \
+      XDG_DATA_HOME="${sandbox_home}/.local/share" \
+      XDG_CONFIG_HOME="${sandbox_home}/.config" \
+      XDG_STATE_HOME="${sandbox_home}/.local/state" \
+      XDG_CACHE_HOME="${sandbox_home}/.cache" \
+      MINTBUTLER_MODULE_DIR="${module_dir}" \
+      MINTBUTLER_MODULE_SLUG="${slug}" \
+      MINTBUTLER_LIB_DIR="${LIB_DIR}" \
+      "${timeout_cmd[@]}" strace -f -s 1024 -o "${strace_log}" \
+        -e trace=open,openat,creat,unlink,unlinkat,rename,renameat,mkdir,mkdirat,rmdir,link,linkat,symlink,symlinkat \
+        bash "${script_file}" "run" < /dev/null > "${sandbox_root}/run.stdout" 2> "${sandbox_root}/run.stderr"
+    ) || run_code="$?"
+  else
+    run_action "run" || run_code="$?"
+  fi
+
+  if [[ "${run_code}" -eq 124 ]]; then
+    printf "FAIL %s: action 'run' timed out after 30s\n" "${slug}"
+    return 1
+  fi
+  if [[ "${run_code}" -ne 0 ]]; then
+    local run_err=""
+    if [[ -f "${sandbox_root}/run.stderr" ]]; then
+      run_err="$(cat "${sandbox_root}/run.stderr")"
+    fi
+    local trimmed_err
+    trimmed_err="$(trim_string "${run_err}")"
+    if [[ -z "${trimmed_err}" ]]; then
+      printf "FAIL %s: action 'run' failed with exit code %d but produced no stderr explanation\n" "${slug}" "${run_code}"
+      return 1
+    fi
+  fi
+
+  if [[ "${use_strace}" -eq 1 ]]; then
+    local leaked_path=""
+    if ! leaked_path="$(check_strace_containment "${strace_log}" "${sandbox_root}")"; then
+      printf "FAIL %s: action 'run' attempted write outside sandbox (%s)\n" "${slug}" "${leaked_path}"
+      return 1
+    fi
+  fi
+
+  # Execute undo (only if declared undo: true)
+  if [[ "${MANIFEST_UNDO}" == "true" ]]; then
+    local undo_code=0
+    run_action "undo" || undo_code="$?"
+    if [[ "${undo_code}" -eq 124 ]]; then
+      printf "FAIL %s: action 'undo' timed out after 30s\n" "${slug}"
+      return 1
+    fi
+    if [[ "${undo_code}" -ne 0 ]]; then
+      local undo_err=""
+      if [[ -f "${sandbox_root}/undo.stderr" ]]; then
+        undo_err="$(cat "${sandbox_root}/undo.stderr")"
+      fi
+      local trimmed_undo_err
+      trimmed_undo_err="$(trim_string "${undo_err}")"
+      if [[ -z "${trimmed_undo_err}" ]]; then
+        printf "FAIL %s: action 'undo' failed with exit code %d but produced no stderr explanation\n" "${slug}" "${undo_code}"
+        return 1
+      fi
+    fi
+  fi
+
+  # Cleanup sandbox
+  rm -rf "${sandbox_root}"
+  trap - EXIT RETURN
+
+  printf 'PASS %s\n' "${slug}"
+  return 0
+}
+
+main() {
+  local target_slug=""
+
+  if [[ "$#" -gt 1 ]]; then
+    print_usage >&2
+    exit 1
+  fi
+
+  if [[ "$#" -eq 1 ]]; then
+    case "${1}" in
+      --help|-h)
+        print_usage
+        exit 0
+        ;;
+      *)
+        target_slug="${1}"
+        ;;
+    esac
+  fi
+
+  local -a slugs=()
+  if [[ -n "${target_slug}" ]]; then
+    slugs+=("${target_slug}")
+  else
+    if [[ ! -d "${MODULES_DIR}" ]]; then
+      printf '(no modules found)\n'
+      exit 0
+    fi
+
+    local entry
+    for entry in "${MODULES_DIR}"/*; do
+      if [[ -d "${entry}" ]]; then
+        slugs+=("$(basename "${entry}")")
+      fi
+    done
+
+    if [[ "${#slugs[@]}" -eq 0 ]]; then
+      printf '(no modules found)\n'
+      exit 0
+    fi
+  fi
+
+  local pass_count=0
+  local fail_count=0
+
+  local slug
+  for slug in "${slugs[@]}"; do
+    if lint_module "${slug}"; then
+      pass_count=$((pass_count + 1))
+    else
+      fail_count=$((fail_count + 1))
+    fi
+  done
+
+  printf 'Summary: %d passed, %d failed\n' "${pass_count}" "${fail_count}"
+
+  if [[ "${fail_count}" -gt 0 ]]; then
+    exit 1
+  fi
+  exit 0
+}
+
+main "$@"
