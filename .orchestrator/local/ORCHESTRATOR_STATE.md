@@ -7,20 +7,21 @@ arena/01a0abf2-mintbutler — never merges. Distribution channel only.
 (empty — fresh engagement, started 2026-09-16)
 
 ## Canonical Project Tracker
-docs/PROJECT_STATE.md on main. Does not exist yet; bootstrapped as a deliverable of task 001 (owner gave discretion, 2026-09-16).
+docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 
 ## Published Task Prompts
 | Seq | Prompt path | Task | Agent branch | PR | Status |
 |---|---|---|---|---|---|
-| 001 | .orchestrator/prompts/001-butler-core-discovery.md | butler core: menu script, module discovery, flags, tracker bootstrap | arena/01a0ac05-mintbutler (session-pinned; deviation disclosed) | #1 | Reviewed 2026-09-16 — MERGE advised, awaiting operator merge |
+| 001 | .orchestrator/prompts/001-butler-core-discovery.md | butler core: menu script, module discovery, flags, tracker bootstrap | arena/01a0ac05-mintbutler (session-pinned; deviation disclosed) | #1 | Merged 2026-09-16 (merge commit f0eb800) |
+| 002 | .orchestrator/prompts/002-bin-modulelint.md | bin/modulelint contract validator | feature/modulelint-validator (or pinned session branch) | — | Dispatched 2026-09-16 |
 
 ## Active Milestone
 v0.1 — menu script + module discovery + modulelint + the two seed modules.
 
 ## Task Queue
-- [ ] PR #1: butler core + discovery + PROJECT_STATE.md bootstrap (Open — MERGE advised 2026-09-16)
-- [ ] 002: bin/modulelint contract validator (Pending — next; author AFTER #1 merges: touches tracker path #1 creates)
-- [ ] 003: seed module desktop-shortcut-creator (Pending; introduces module-side ask helper)
+- [x] PR #1: butler core + discovery + PROJECT_STATE.md bootstrap (Merged 2026-09-16)
+- [ ] 002: bin/modulelint contract validator (In Progress — dispatched 2026-09-16)
+- [ ] 003: seed module desktop-shortcut-creator (Pending — next; introduces module-side ask helper; needs 002's gate)
 - [ ] 004: seed module android-file-transfer (Pending; first elevated path)
 
 ## Interrupted Work
@@ -55,4 +56,4 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 ## Hardening Log
 | Date | Seq | Category | Symptom | Impact | Disposition | Hardening |
 |---|---|---|---|---|---|---|
-| 2026-09-16 | 001 | Environment | Arena agent session was pinned to its own `arena/*` branch; prompt §8 target `feature/butler-core-discovery` could not be created/used | Could not follow branch/push-cadence lines verbatim; single `feat:` commit instead of wip checkpoints | Hardening candidate | Prompt 002 §8/§9: declare that if the runner pins the session to a branch, use the pinned branch as target (base stays `main`), commit/push there, open the PR from it |
+| 2026-09-16 | 001 | Environment | Arena agent session was pinned to its own `arena/*` branch; prompt §8 target `feature/butler-core-discovery` could not be created/used | Could not follow branch/push-cadence lines verbatim; single `feat:` commit instead of wip checkpoints | Hardened | Branch-substitution rule written into prompt 002 §4 fact 10 + §8 |
