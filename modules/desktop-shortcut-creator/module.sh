@@ -249,7 +249,140 @@ run_custom() {
 }
 
 run_scan_and_place() {
-  printf 'Scan & place mode\n'
+  local user_app_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  local system_dirs="${MINTBUTLER_TEST_APP_DIRS-/usr/share/applications}"
+
+  local -a dir_list=()
+  if [[ -d "${user_app_dir}" ]]; then
+    dir_list+=("${user_app_dir}")
+  fi
+  local -a sys_arr=()
+  IFS=':' read -r -a sys_arr <<< "${system_dirs}" || true
+  local d
+  for d in "${sys_arr[@]}"; do
+    if [[ -n "${d}" && -d "${d}" ]]; then
+      dir_list+=("${d}")
+    fi
+  done
+
+  # Collect applications; prefer user-dir copies on duplicate names
+  local -a app_names=()
+  local -a app_files=()
+  local -A seen_names=()
+
+  local dir file name line base
+  for dir in "${dir_list[@]}"; do
+    for file in "${dir}"/*.desktop; do
+      if [[ ! -f "${file}" || ! -r "${file}" ]]; then
+        continue
+      fi
+      name=""
+      local cr=$'\r'
+      while IFS= read -r line || [[ -n "${line}" ]]; do
+        line="${line%"$cr"}"
+        if [[ "${line}" == Name=* ]]; then
+          name="${line#Name=}"
+          break
+        fi
+      done < "${file}"
+      if [[ -z "${name}" ]]; then
+        base="$(basename "${file}" .desktop)"
+        name="${base}"
+      fi
+      if [[ -z "${name}" ]]; then
+        continue
+      fi
+      if [[ -z "${seen_names["${name}"]:-}" ]]; then
+        seen_names["${name}"]="${file}"
+        app_names+=("${name}")
+      fi
+    done
+  done
+
+  if [[ "${#app_names[@]}" -eq 0 ]]; then
+    printf 'No installed applications found to place.\n'
+    return 0
+  fi
+
+  # Sort application names case-insensitively
+  local sorted_names_str
+  sorted_names_str="$(printf '%s\n' "${app_names[@]}" | sort -f)"
+  local -a sorted_names=()
+  local -a sorted_srcs=()
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ -n "${line}" ]]; then
+      sorted_names+=("${line}")
+      sorted_srcs+=("${seen_names["${line}"]}")
+    fi
+  done <<< "${sorted_names_str}"
+
+  # Run multi-select picker
+  if ! picker_multi_select "Scan & place — Select applications to add to Desktop:" "${sorted_names[@]}"; then
+    printf 'Cancelled.\n'
+    return 0
+  fi
+
+  if [[ "${#PICKER_SELECTED_INDICES[@]}" -eq 0 ]]; then
+    printf 'No applications selected.\n'
+    return 0
+  fi
+
+  # Confirmation listing (strictly <= 23 lines)
+  local total_sel="${#PICKER_SELECTED_INDICES[@]}"
+  printf 'Creating desktop shortcuts (%d selected):\n' "${total_sel}"
+  local max_list=18 list_count=0 idx c_name
+  for idx in "${PICKER_SELECTED_INDICES[@]}"; do
+    list_count=$(( list_count + 1 ))
+    c_name="${sorted_names[idx]}"
+    if (( list_count <= max_list )); then
+      printf '  - %s\n' "${c_name}"
+    fi
+  done
+  if (( total_sel > max_list )); then
+    printf '  …and %d more\n' "$(( total_sel - max_list ))"
+  fi
+  printf '\n'
+
+  # Copy and trust each selected application
+  local desk_dir="${HOME}/Desktop"
+  mkdir -p "${desk_dir}"
+
+  local c_src c_slug resolve_info target_file status
+  for idx in "${PICKER_SELECTED_INDICES[@]}"; do
+    c_name="${sorted_names[idx]}"
+    c_src="${sorted_srcs[idx]}"
+    if ! c_slug="$(desktop_sanitize_name "${c_name}")"; then
+      continue
+    fi
+
+    resolve_info="$(desktop_resolve_target "${desk_dir}" "${c_slug}" "${c_src}")"
+    target_file="$(echo "${resolve_info}" | cut -d' ' -f1)"
+    status="$(echo "${resolve_info}" | cut -d' ' -f2)"
+
+    if [[ "${status}" == "already-done" ]]; then
+      printf 'Already exists: %s (identical content, kept)\n' "${target_file}"
+    else
+      cp "${c_src}" "${target_file}"
+      desktop_trust_and_exec "${target_file}"
+      desktop_record_path "desktop-shortcut-creator" "$(basename "${target_file}" .desktop)" "${target_file}"
+      if [[ "${status}" == "versioned" ]]; then
+        printf 'Created %s on Desktop; existing %s.desktop was kept.\n' "$(basename "${target_file}")" "${c_slug}"
+      else
+        printf 'Created %s on Desktop\n' "$(basename "${target_file}")"
+      fi
+
+      # Verbatim entries: advisory-only validation if desktop-file-validate exists
+      if command -v desktop-file-validate >/dev/null 2>&1; then
+        local val_out=""
+        val_out="$(desktop-file-validate "${target_file}" 2>&1 || true)"
+        if [[ -n "${val_out}" ]]; then
+          printf 'advisory: %s: %s\n' "$(basename "${target_file}")" "${val_out}"
+        fi
+      fi
+    fi
+  done
+
+  return 0
 }
 
 run() {

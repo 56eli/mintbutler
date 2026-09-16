@@ -19,7 +19,7 @@ desktop_sanitize_name() {
 
 desktop_check_shadowing() {
   local slug="${1:-}"
-  local system_dirs="${MINTBUTLER_TEST_APP_DIRS:-/usr/share/applications}"
+  local system_dirs="${MINTBUTLER_TEST_APP_DIRS-/usr/share/applications}"
   local -a dirs=()
   IFS=':' read -r -a dirs <<< "${system_dirs}" || true
   local dir
