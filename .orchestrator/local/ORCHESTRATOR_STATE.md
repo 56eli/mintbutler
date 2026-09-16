@@ -14,7 +14,8 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 |---|---|---|---|---|---|
 | 001 | .orchestrator/prompts/001-butler-core-discovery.md | butler core: menu script, module discovery, flags, tracker bootstrap | arena/01a0ac05-mintbutler (session-pinned; deviation disclosed) | #1 | Merged 2026-09-16 (merge commit f0eb800) |
 | 002 | .orchestrator/prompts/002-bin-modulelint.md | bin/modulelint contract validator | arena/01a0ac22-mintbutler (pinned; substitution recorded per §4 fact 10) | #2 | Merged 2026-09-16 (merge commit 4eeac97) |
-| 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | desktop-shortcut-creator v1: scan & place + custom modes, shared entry/picker libs, spec amendments, 23-line law | feature/shortcut-creator-v1 (or pinned session branch) | — | Republished 2026-09-16 with owner v1 rulings; dispatched |
+| 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | desktop-shortcut-creator v1: scan & place + custom modes, shared entry/picker libs, spec amendments, 23-line law | arena/01a0ac62-mintbutler (pinned; substitution recorded) | #3 | Reviewed 2026-09-16 — REVISE (SC2086 in test-launch line); revision prompt 004 published |
+| 004 | .orchestrator/prompts/004-revise-shortcut-creator-sc2086.md | REVISION of PR #3: shellcheck-clean test-launch word splitting | arena/01a0ac62-mintbutler (continue) | #3 | Dispatched 2026-09-16 |
 
 ## Active Milestone
 v0.1 — menu script + module discovery + modulelint + the two seed modules.
@@ -33,6 +34,7 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - Module-side `ask` helper ships with task 003 (in flight); `elevate` helper ships with task 004 (first elevated consumer).
 - LICENSE file not yet requested.
 - v0.2 features (categories, favorites) deferred until v0.1 is proven on the owner's machine.
+- `desktop_trust_and_exec` swallows gio failures silently (`2>/dev/null || true`); honest advisory output is preferable — candidate for a future small task (noted at PR #3 review, not REVISE-worthy).
 
 ## Scope Boundaries
 - No modules beyond the two seeds until the owner names new chores (backlog = owner's life).
@@ -63,3 +65,6 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 |---|---|---|---|---|---|---|
 | 2026-09-16 | 001 | Environment | Arena agent session was pinned to its own `arena/*` branch; prompt §8 target `feature/butler-core-discovery` could not be created/used | Could not follow branch/push-cadence lines verbatim; single `feat:` commit instead of wip checkpoints | Hardened | Branch-substitution rule written into prompt 002 §4 fact 10 + §8 |
 | 2026-09-16 | 002 | Environment | Branch-substitution rule used: pinned branch `arena/01a0ac22-mintbutler`, recorded in Session Irregularities as instructed | none — rule worked as designed; full 6-checkpoint cadence followed | Scoped | — |
+| 2026-09-16 | 003 | Repository | `bin/modulelint` crashed on `-n` tokens (`basename: invalid option`) inside `check_write_targets` | modulelint errored on scripts containing `[[ -n … ]]`; agent fixed within allowed modify scope (`basename --`) | Scoped | Fixed in PR #3; future lint edits must keep `--` guards on token-parsing utility calls |
+| 2026-09-16 | 003 | Environment | Branch-substitution rule used again: pinned branch `arena/01a0ac62-mintbutler` | none — rule worked | Scoped | — |
+| 2026-09-16 | 003-review | Repository | SC2086 exposure in delivered module (`setsid ${launch_cmd}`) — gate hard-fails it wherever shellcheck exists | REVISE issued (prompt 004); not blocking on owner's shellcheck-less Mint | Hardened | Revision 004 fixes; future module prompts: remind agents the gate SC2086-fails unquoted expansions when shellcheck is present |
