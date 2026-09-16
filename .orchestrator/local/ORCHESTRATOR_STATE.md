@@ -51,6 +51,8 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - CI: "Lets keep CI out for now".
 - Tracker bootstrap at orchestrator discretion: "go ahead with bootstrapping docs at your own discretions".
 - Verification split: sandbox checks (syntax, shellcheck, harness, later modulelint) + owner manual acceptance on Mint 22.2.
+- desktop-shortcut-creator icon field: free text — icon file path or theme icon name; empty = system default (answer to structured question, 2026-09-16).
+- desktop-shortcut-creator name conflict: create alongside with `-N` version suffix, never overwrite (answer to structured question, 2026-09-16). Both rulings folded into prompt 003 pre-dispatch (amendment banner in file) and into its tracker deliverable.
 
 ## Known Gaps
 - Sandboxes cannot verify real Mint desktop behavior (gvfs metadata trust flag, MTP) — owner acceptance covers those paths.

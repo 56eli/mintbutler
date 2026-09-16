@@ -1,5 +1,10 @@
 # 003 — seed module: desktop-shortcut-creator (+ module-side ask helper)
 
+> AMENDED 2026-09-16 before dispatch (no agent has fetched this file): owner
+> rulings folded into §4 facts 4–5, §6 stages (m)/(o), deliverable 5, and §15:
+> name conflicts create a `-N` version alongside instead of aborting; the
+> icon field accepts a file path OR a theme icon name.
+
 ## 0. FETCH AND VERIFY
 
 You fetched this file with:
@@ -83,17 +88,23 @@ Treat these as settled:
    a plain stderr line if empty) → target
    `$HOME/.local/share/applications/<sanitized>.desktop` → if it exists with
    identical content: report already-created and exit 0 (idempotent); if it
-   exists with different content: abort with a plain stderr line telling the
-   user to undo first, exit 1 → write the entry, record paths, then (only if
-   the desktop copy was accepted) copy to `$HOME/Desktop/<sanitized>.desktop`,
-   `chmod +x` that copy, and `gio set <copy> metadata::trusted true` in the
-   user session — NEVER sudo.
+   exists with DIFFERENT content: leave it untouched and create the next
+   free version alongside — `<sanitized>-2.desktop`, then `-3`, … — telling
+   the user plainly that the existing entry was kept and which version was
+   created (owner ruling 2026-09-16: never overwrite) → write the entry,
+   record paths, then (only if the desktop copy was accepted) copy to
+   `$HOME/Desktop/<same-versioned-name>.desktop`, `chmod +x` that copy, and
+   `gio set <copy> metadata::trusted true` in the user session — NEVER sudo.
 5. **`.desktop` content:** `[Desktop Entry]`, `Type=Application`, `Name=`,
-   `Exec=`, `Icon=` only when given, `Comment=Created by mintbutler
-   desktop-shortcut-creator`. Validate with `desktop-file-validate` WHEN
-   INSTALLED; if it fails validation, abort BEFORE recording anything and
-   show the validator's output. If the binary is absent, print an advisory
-   line and continue.
+   `Exec=`, `Icon=` only when given (owner ruling 2026-09-16: the field is
+   free text — an icon file path OR a theme icon name such as `firefox`;
+   empty means no Icon line, system default), `Comment=Created by mintbutler
+   desktop-shortcut-creator`. If the icon value contains `/` (a file path)
+   and the file does not exist, print one plain advisory line and continue —
+   never fail the run over an icon. Validate the finished entry with
+   `desktop-file-validate` WHEN INSTALLED; if it fails validation, abort
+   BEFORE recording anything and show the validator's output. If the binary
+   is absent, print an advisory line and continue.
 6. **Tool absence honesty:** if `gio` is absent when a desktop copy was
    requested, still copy and `chmod +x`, but print a plain advisory that the
    trusted flag could not be set and Cinnamon may ask until it is trusted
@@ -177,14 +188,19 @@ Modify:
      exits 0; the fake HOME gains
      `.local/share/applications/test-app.desktop` containing `Name=Test App`
      and `Exec=/usr/bin/true`; the state dir contains `test-app.paths`
-     listing exactly that path; re-running the same input exits 0 printing an
+     listing exactly that path; re-running the SAME input exits 0 printing an
      already-created message and changes nothing (byte-diff before/after);
+     then re-running with a DIFFERENT command
+     (`printf 'Test App\n/usr/bin/false\n\nn\n' | …`) exits 0, creates
+     `test-app-2.desktop` containing `Exec=/usr/bin/false`, and leaves the
+     original `test-app.desktop` byte-identical (versioning rule, §4 fact 4);
    - (n) desktop-copy variant:
      `printf 'Copy App\n/usr/bin/true\n\ny\n' | HOME=<fake2> … run` exits 0;
      `<fake2>/Desktop/copy-app.desktop` exists and is executable; its path is
-     recorded in `copy-app.paths`;
-   - (o) undo after (m) or (n): `HOME=<same fake> bash module.sh undo` exits
-     0, deletes every recorded file and the state file; a second undo exits 0
+     recorded in `copy-app.paths` alongside the menu-entry path;
+   - (o) undo after (m): `HOME=<fake> bash module.sh undo` exits 0 and
+     deletes BOTH recorded entries (`test-app.desktop` and
+     `test-app-2.desktop`) plus their state files; a second undo exits 0
      printing "Nothing to undo.";
    - (p) `plan` and `dry-run` with stdin `/dev/null` exit 0 with non-empty
      output and leave the fake HOME unchanged.
@@ -199,6 +215,14 @@ Modify:
 - **Active Milestone:** v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - **Current State:** core menu (PR #1, merged 2026-09-16) and `bin/modulelint` gate (PR #2, merged 2026-09-16) landed; seed module `desktop-shortcut-creator` landed via PR for task 003.
 - **Immediate Next Task:** task 004 — seed module `android-file-transfer` (risk: elevated, undo: false).
+```
+
+   and append these two bullets to its `## 3. Settled Decisions & Rationale`
+   list:
+
+```markdown
+- desktop-shortcut-creator icon field: free text — an icon file path or a theme icon name; empty = system default (owner, 2026-09-16).
+- desktop-shortcut-creator name conflict: never overwrite — create the launcher alongside with a `-N` version suffix and leave the existing entry untouched (owner, 2026-09-16).
 ```
 
    Modify nothing else in the tracker.
@@ -382,7 +406,8 @@ Before opening the PR, all of these must pass:
 Title: `feat: desktop-shortcut-creator seed module`. The description must
 contain: a summary; design rationale (why prompts live only in `run`; how
 undo uses the recorded path list; how non-interactive refusal keeps the gate
-green; the tool-absence degradation policy); test results per §10 layer with
+green; the tool-absence degradation policy; how the two owner rulings —
+`-N` versioning on conflict, free-text icon field — are implemented); test results per §10 layer with
 exact commands and outcomes; the safety statement "this module writes only
 under $HOME, never uses sudo, records every file it creates, and undo removes
 exactly that recorded set; all harness assertions run against fake HOME
