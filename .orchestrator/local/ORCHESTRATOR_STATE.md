@@ -14,8 +14,8 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 |---|---|---|---|---|---|
 | 001 | .orchestrator/prompts/001-butler-core-discovery.md | butler core: menu script, module discovery, flags, tracker bootstrap | arena/01a0ac05-mintbutler (session-pinned; deviation disclosed) | #1 | Merged 2026-09-16 (merge commit f0eb800) |
 | 002 | .orchestrator/prompts/002-bin-modulelint.md | bin/modulelint contract validator | arena/01a0ac22-mintbutler (pinned; substitution recorded per §4 fact 10) | #2 | Merged 2026-09-16 (merge commit 4eeac97) |
-| 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | desktop-shortcut-creator v1: scan & place + custom modes, shared entry/picker libs, spec amendments, 23-line law | arena/01a0ac62-mintbutler (pinned; substitution recorded) | #3 | Reviewed 2026-09-16 — REVISE (SC2086 in test-launch line); revision prompt 004 published |
-| 004 | .orchestrator/prompts/004-revise-shortcut-creator-sc2086.md | REVISION of PR #3: shellcheck-clean test-launch word splitting | arena/01a0ac62-mintbutler (continue) | #3 | Dispatched 2026-09-16 |
+| 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | desktop-shortcut-creator v1: scan & place + custom modes, shared entry/picker libs, spec amendments, 23-line law | arena/01a0ac62-mintbutler (pinned; substitution recorded) | #3 | Re-reviewed 2026-09-16 after revision 3b4a866 — MERGE advised, awaiting operator merge |
+| 004 | .orchestrator/prompts/004-revise-shortcut-creator-sc2086.md | REVISION of PR #3: shellcheck-clean test-launch word splitting | arena/01a0ac62-mintbutler (continued) | #3 | Completed 2026-09-16 — fix verified, folded into PR #3 verdict |
 
 ## Active Milestone
 v0.1 — menu script + module discovery + modulelint + the two seed modules.
@@ -23,8 +23,8 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 ## Task Queue
 - [x] PR #1: butler core + discovery + PROJECT_STATE.md bootstrap (Merged 2026-09-16)
 - [x] PR #2: bin/modulelint contract validator (Merged 2026-09-16)
-- [ ] 003: seed module desktop-shortcut-creator + lib/ask.sh (In Progress — dispatched 2026-09-16)
-- [ ] 004: seed module android-file-transfer (Pending — next; first elevated path; planned order: 10 so it lists before desktop-shortcut-creator's 20, matching the README example)
+- [ ] PR #3: desktop-shortcut-creator v1 (Open — revised, MERGE advised 2026-09-16)
+- [ ] 005: seed module android-file-transfer (Pending — next after #3 merges; first elevated path; order: 10 so it lists before desktop-shortcut-creator's 20, matching the README example; introduces module-side elevate helper)
 
 ## Interrupted Work
 - none
