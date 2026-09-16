@@ -1,0 +1,10 @@
+title: Desktop shortcut creator
+description: >-
+  Creates desktop shortcuts two ways: pick installed apps and place
+  trusted desktop copies, or build a custom app/folder/URL launcher —
+  validated, undoable, never sudo.
+risk: low
+undo: true
+needs: []
+asks: 9
+order: 20

@@ -111,7 +111,7 @@ check_rm_rf_targets() {
       local rm_idx=-1
       local t_i
       for (( t_i=0; t_i<${#tokens[@]}; t_i++ )); do
-        if [[ "$(basename "${tokens[t_i]}")" == "rm" ]]; then
+        if [[ "$(basename -- "${tokens[t_i]}")" == "rm" ]]; then
           rm_idx="${t_i}"
           break
         fi
@@ -198,7 +198,7 @@ check_write_targets() {
 
       if [[ "${#tokens[@]}" -eq 0 ]]; then continue; fi
       local cmd
-      cmd="$(basename "${tokens[0]}")"
+      cmd="$(basename -- "${tokens[0]}")"
 
       case "${cmd}" in
         tee)
