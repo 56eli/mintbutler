@@ -237,7 +237,11 @@ run_custom() {
         elif [[ "${launch_cmd}" =~ ^\'(.*)\'$ ]]; then
           launch_cmd="${BASH_REMATCH[1]}"
         fi
-        setsid ${launch_cmd} </dev/null >/dev/null 2>&1 &
+        local -a launch_args=()
+        read -r -a launch_args <<< "${launch_cmd}"
+        if [[ "${#launch_args[@]}" -gt 0 ]]; then
+          setsid "${launch_args[@]}" </dev/null >/dev/null 2>&1 &
+        fi
       else
         printf 'advisory: setsid not found; test-launch skipped\n'
       fi
