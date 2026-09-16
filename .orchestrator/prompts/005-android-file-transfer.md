@@ -1,3 +1,12 @@
+# SUPERSEDED — DO NOT RUN — task cancelled by owner before dispatch
+
+> CANCELLED 2026-09-16: the owner withdrew the need for Android/ADB phone
+> mounting and file transfer ("I don't need adb phone mounting and file
+> transfer functionality anymore, you can remove it"). This prompt was never
+> dispatched to an agent. Do not execute it. If you fetched this file
+> expecting a live task, HALT and report to the operator. The text below is
+> retained for the audit record only.
+
 # 005 — seed module: android-file-transfer (+ lib/elevate.sh, completing v0.1)
 
 ## 0. FETCH AND VERIFY

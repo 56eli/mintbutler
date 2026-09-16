@@ -16,7 +16,7 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 002 | .orchestrator/prompts/002-bin-modulelint.md | bin/modulelint contract validator | arena/01a0ac22-mintbutler (pinned; substitution recorded per §4 fact 10) | #2 | Merged 2026-09-16 (merge commit 4eeac97) |
 | 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | desktop-shortcut-creator v1: scan & place + custom modes, shared entry/picker libs, spec amendments, 23-line law | arena/01a0ac62-mintbutler (pinned; substitution recorded) | #3 | Merged 2026-09-16 (merge commit 52963a4) |
 | 004 | .orchestrator/prompts/004-revise-shortcut-creator-sc2086.md | REVISION of PR #3: shellcheck-clean test-launch word splitting | arena/01a0ac62-mintbutler (continued) | #3 | Completed 2026-09-16 — fix verified, folded into PR #3 verdict |
-| 005 | .orchestrator/prompts/005-android-file-transfer.md | seed module android-file-transfer + lib/elevate.sh (completes v0.1) | feature/android-file-transfer (or pinned session branch) | — | Dispatched 2026-09-16 |
+| 005 | .orchestrator/prompts/005-android-file-transfer.md | seed module android-file-transfer + lib/elevate.sh (completes v0.1) | — | — | CANCELLED 2026-09-16 — owner withdrew the need; prompt never dispatched (retained, bannered, DO NOT RUN) |
 
 ## Active Milestone
 v0.1 — menu script + module discovery + modulelint + the two seed modules.
@@ -25,8 +25,9 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - [x] PR #1: butler core + discovery + PROJECT_STATE.md bootstrap (Merged 2026-09-16)
 - [x] PR #2: bin/modulelint contract validator (Merged 2026-09-16)
 - [x] PR #3: desktop-shortcut-creator v1 (Merged 2026-09-16)
-- [ ] 005: seed module android-file-transfer + lib/elevate.sh (In Progress — dispatched 2026-09-16; completes v0.1)
-- [ ] After v0.1: owner acceptance on Mint 22.2, then v0.2 backlog (menu categories, favorites) + owner's chore backlog
+- [~] 005: android-file-transfer — CANCELLED by owner 2026-09-16 before dispatch
+- [ ] 006: docs alignment after cancellation (Pending — awaiting owner go-ahead)
+- [ ] Then: owner acceptance of v0.1 on Mint 22.2; v0.2 backlog (menu categories, favorites) + owner's chore backlog afterwards
 
 ## Interrupted Work
 - none
@@ -57,6 +58,7 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - Verification split: sandbox checks (syntax, shellcheck, harness, later modulelint) + owner manual acceptance on Mint 22.2.
 - desktop-shortcut-creator icon field: free text — icon file path or theme icon name; empty = system default (answer to structured question, 2026-09-16).
 - desktop-shortcut-creator name conflict: create alongside with `-N` version suffix, never overwrite (answer to structured question, 2026-09-16). Both rulings folded into prompt 003 pre-dispatch (amendment banner in file) and into its tracker deliverable.
+- Cancellation (owner, 2026-09-16, verbatim): "Oh i don't need adb phone mounting and file transfer functionality anymore, you can remove it." — task 005 (android-file-transfer) cancelled before dispatch; prompt retained with a DO-NOT-RUN banner. v0.1 scope is now: menu + discovery + modulelint gate + desktop-shortcut-creator — all delivered. Docs still mention the cancelled seed (README seeds list, MODULE_SPEC `needs: [jmtpfs]` example, tracker 'both seed modules' phrasing) → proposed follow-up 006 (docs alignment PR), awaiting owner go-ahead. lib/elevate.sh deferred until a real elevated module exists.
 - Owner v1 rulings (2026-09-16, relayed via hub review): MODULE_SPEC §3 amended — bounded question series, budget declared as `asks: <n>` in the manifest, Enter skips optionals, confirmations stay with the menu, flows testable via scripted stdin; "No standing exceptions — docs never drift from reality." Two entry modes: Scan & place (default: scan user+system app dirs, paginated multi-select picker, one confirmation, trusted desktop copies, whole-set undo) and Custom (guided type/target/name/icon/terminal?/workdir?/desktop-copy sequence). New spec law (§4, enforced in suite): "No menu or submenu screen may exceed 23 terminal lines — ever"; pagination = entries page + one header + one footer (`n next / p prev / numbers / s search / q done`). Shared libs: lib/desktop-entry.sh (write→validate→trust→record; future appimage-installer reuses it) and lib/picker.sh (shared pagination footer per hub note). v1 quality items: Exec-quoting refuse-with-reason, end-of-run transparency (final entry content + offered test-launch), shadow warning vs /usr/share/applications. Out of scope: panel pinning; editing existing entries (future menu-entry-manager). All folded into prompt 003 amendment 2 pre-dispatch.
 
 ## Known Gaps
