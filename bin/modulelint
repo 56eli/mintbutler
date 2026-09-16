@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# bin/modulelint — the module contract validator for mintbutler.
+# Mechanically enforces MODULE_SPEC §5.
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
+LIB_DIR="${REPO_ROOT}/lib"
+MODULES_DIR="${REPO_ROOT}/modules"
+
+if [[ ! -f "${LIB_DIR}/manifest.sh" ]]; then
+  printf 'Error: missing lib/manifest.sh\n' >&2
+  exit 1
+fi
+
+# shellcheck source=lib/manifest.sh
+source "${LIB_DIR}/manifest.sh"
+
+print_usage() {
+  cat <<'USAGE'
+Usage:
+  bin/modulelint          Lint all modules in modules/
+  bin/modulelint <slug>   Lint a single module by slug
+  bin/modulelint --help   Show this help
+USAGE
+}
+
+lint_module() {
+  local slug="${1}"
+  local module_dir="${MODULES_DIR}/${slug}"
+
+  # Check 1 — Manifest & slug (spec §5.1)
+  if [[ ! "${slug}" =~ ^[a-z0-9-]+$ ]]; then
+    printf 'FAIL %s: invalid slug name (must match ^[a-z0-9-]+$)\n' "${slug}"
+    return 1
+  fi
+
+  if [[ ! -d "${module_dir}" ]]; then
+    printf 'FAIL %s: module directory not found\n' "${slug}"
+    return 1
+  fi
+
+  local manifest_file="${module_dir}/module.yml"
+  if [[ ! -f "${manifest_file}" ]]; then
+    printf 'FAIL %s: missing module.yml\n' "${slug}"
+    return 1
+  fi
+
+  if ! manifest_parse "${manifest_file}"; then
+    printf 'FAIL %s: manifest error: %s\n' "${slug}" "${MANIFEST_ERROR}"
+    return 1
+  fi
+
+  local script_file="${module_dir}/module.sh"
+  if [[ ! -f "${script_file}" ]]; then
+    printf 'FAIL %s: missing module.sh\n' "${slug}"
+    return 1
+  fi
+
+  printf 'PASS %s\n' "${slug}"
+  return 0
+}
+
+main() {
+  local target_slug=""
+
+  if [[ "$#" -gt 1 ]]; then
+    print_usage >&2
+    exit 1
+  fi
+
+  if [[ "$#" -eq 1 ]]; then
+    case "${1}" in
+      --help|-h)
+        print_usage
+        exit 0
+        ;;
+      *)
+        target_slug="${1}"
+        ;;
+    esac
+  fi
+
+  local -a slugs=()
+  if [[ -n "${target_slug}" ]]; then
+    slugs+=("${target_slug}")
+  else
+    if [[ ! -d "${MODULES_DIR}" ]]; then
+      printf '(no modules found)\n'
+      exit 0
+    fi
+
+    local entry
+    for entry in "${MODULES_DIR}"/*; do
+      if [[ -d "${entry}" ]]; then
+        slugs+=("$(basename "${entry}")")
+      fi
+    done
+
+    if [[ "${#slugs[@]}" -eq 0 ]]; then
+      printf '(no modules found)\n'
+      exit 0
+    fi
+  fi
+
+  local pass_count=0
+  local fail_count=0
+
+  local slug
+  for slug in "${slugs[@]}"; do
+    if lint_module "${slug}"; then
+      pass_count=$((pass_count + 1))
+    else
+      fail_count=$((fail_count + 1))
+    fi
+  done
+
+  printf 'Summary: %d passed, %d failed\n' "${pass_count}" "${fail_count}"
+
+  if [[ "${fail_count}" -gt 0 ]]; then
+    exit 1
+  fi
+  exit 0
+}
+
+main "$@"
