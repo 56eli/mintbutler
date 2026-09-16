@@ -3,7 +3,7 @@ set -euo pipefail
 
 # lib/manifest.sh — strict parser for the MODULE_SPEC §2 manifest subset.
 # Supports EXACTLY: title, description (>- folded), risk, undo, needs,
-# order (optional), platform (optional). Unknown field or unparseable
+# order (optional), platform (optional), asks (optional). Unknown field or unparseable
 # value => broken (return 1, MANIFEST_BROKEN=1), never crashes.
 
 MANIFEST_TITLE=""
@@ -13,8 +13,10 @@ MANIFEST_UNDO=""
 MANIFEST_NEEDS="[]"
 MANIFEST_ORDER=""
 MANIFEST_PLATFORM="mint-22"
+MANIFEST_ASKS=""
 MANIFEST_BROKEN="0"
 MANIFEST_ERROR=""
+export MANIFEST_ASKS
 
 _manifest_trim() {
   local s="${1:-}"
@@ -71,6 +73,7 @@ manifest_parse() {
   MANIFEST_NEEDS="[]"
   MANIFEST_ORDER=""
   MANIFEST_PLATFORM="mint-22"
+  MANIFEST_ASKS=""
   MANIFEST_BROKEN="0"
   MANIFEST_ERROR=""
 
@@ -90,9 +93,9 @@ manifest_parse() {
     return 1
   fi
 
-  local title="" risk="" undo="" needs="" order="" platform="" desc_text=""
+  local title="" risk="" undo="" needs="" order="" platform="" asks="" desc_text=""
   local seen_title="0" seen_desc="0" seen_risk="0" seen_undo="0"
-  local seen_needs="0" seen_order="0" seen_platform="0"
+  local seen_needs="0" seen_order="0" seen_platform="0" seen_asks="0"
   local in_desc="0"
   local broken="0" err=""
   local line trimmed key raw_value value stripped
@@ -150,7 +153,7 @@ manifest_parse() {
       break
     fi
     case "${key}" in
-      title|description|risk|undo|needs|order|platform)
+      title|description|risk|undo|needs|order|platform|asks)
         ;;
       *)
         broken="1"
@@ -266,6 +269,20 @@ manifest_parse() {
         platform="${value}"
         seen_platform="1"
         ;;
+      asks)
+        if [[ "${seen_asks}" == "1" ]]; then
+          broken="1"
+          err="duplicate asks"
+          break
+        fi
+        if [[ ! "${value}" =~ ^[0-9]+$ ]]; then
+          broken="1"
+          err="invalid asks"
+          break
+        fi
+        asks="${value}"
+        seen_asks="1"
+        ;;
     esac
   done < "${file}"
 
@@ -319,6 +336,12 @@ manifest_parse() {
   else
     MANIFEST_PLATFORM="mint-22"
   fi
+  if [[ "${seen_asks}" == "1" ]]; then
+    MANIFEST_ASKS="${asks}"
+  else
+    MANIFEST_ASKS=""
+  fi
+  export MANIFEST_ASKS
   MANIFEST_BROKEN="0"
   MANIFEST_ERROR=""
   return 0
