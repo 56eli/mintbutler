@@ -17,7 +17,10 @@ source "${LIB_DIR}/ask.sh"
 source "${LIB_DIR}/desktop-entry.sh"
 
 MODULE_SLUG="appimage-installer"
-INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/mintbutler-appimages"
+# AppImage copies deliberately stay in the fixed managed location from the
+# module contract; the applications directory follows the shared sibling's
+# XDG-aware user-data convention.
+INSTALL_DIR="${HOME}/.local/share/mintbutler-appimages"
 APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mintbutler/${MODULE_SLUG}"
 
