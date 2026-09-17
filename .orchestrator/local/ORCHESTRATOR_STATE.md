@@ -22,6 +22,11 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 ## Active Milestone
 v0.1 — menu script + module discovery + modulelint + the two seed modules.
 
+## Orchestrator Output Contract (survival anchor — do not delete)
+- Every reply's top line: `mintbutler agent`.
+- After every plan of actions: attach the dispatch-agent stub (owner directive 2026-09-17).
+- If the v4.5 orchestrator prompt text is available, pin it here or in a repo file and diff behavior against it.
+
 ## Task Queue
 - [x] PR #1: butler core + discovery + PROJECT_STATE.md bootstrap (Merged 2026-09-16)
 - [x] PR #2: bin/modulelint contract validator (Merged 2026-09-16)
