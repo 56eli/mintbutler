@@ -1,0 +1,11 @@
+title: AppImage installer
+description: >-
+  Installs an AppImage for the current user: validates the file, copies it
+  to a managed location, marks it executable, and creates a menu entry
+  through the shared desktop-entry library. Undo removes the entry and the
+  installed copy.
+risk: low
+undo: true
+needs: []
+asks: 3
+order: 10
