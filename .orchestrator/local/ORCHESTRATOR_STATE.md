@@ -19,7 +19,7 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 005 | .orchestrator/prompts/005-android-file-transfer.md | seed module android-file-transfer + lib/elevate.sh (completes v0.1) | — | — | CANCELLED 2026-09-16 — owner withdrew the need; prompt never dispatched (retained, bannered, DO NOT RUN) |
 | 006 | .orchestrator/prompts/006-batch1-convention-docs.md | batch #1 kickoff: menu-ordering convention, docs alignment, backlog stub | arena/01a0acb9-mintbutler (pinned; substitution recorded) | #4 | Merged 2026-09-17 (merge commit 8d0bd3e) |
 | 007 | .orchestrator/prompts/007-screenshot-studio.md | screenshot-studio: flameshot install + Print Screen dconf rebind, recorded-restore undo, lib/elevate.sh debut | arena/01a0accc-mintbutler (pinned; substitution recorded) | #5 | Merged 2026-09-17 (merge commit d576a42) |
-| 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (amended 2026-09-17 pre-dispatch: tracker deliverable now also carries the PR #5 Deferred gate-hardening row) | — | — | Published + amended 2026-09-17 — not yet dispatched |
+| 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (+ PR #5 distillation/deferred rows) | arena/01a0b02b-mintbutler (pinned; substitution recorded) | #6 | Reviewed 2026-09-17 — MERGE advised, awaiting operator merge |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -40,7 +40,7 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] PR #3: desktop-shortcut-creator v1 (Merged 2026-09-16)
 - [~] 005: android-file-transfer — CANCELLED by owner 2026-09-16 before dispatch
 - [x] 006: batch #1 convention + docs alignment (PR #4 merged 2026-09-17, commit 8d0bd3e)
-- [ ] 008: spec pin + bin/orchestrator-check — published + amended 2026-09-17; awaiting dispatch (owner ran 007 first)
+- [ ] 008: spec pin + bin/orchestrator-check — PR #6 reviewed 2026-09-17, MERGE advised; awaiting operator merge
 - [x] 007: screenshot-studio — PR #5 merged 2026-09-17 (d576a42)
 - [ ] 009: default-apps-editor (Pending — build order 2; order 30; xdg-mime, current-vs-new display)
 - [ ] 010: appimage-installer (Pending — build order 3; order 10; reuses lib/desktop-entry.sh)
@@ -119,6 +119,9 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 | 2026-09-17 | orch | Prompt | Session condensation dropped output-format duties (stub first line, publish form); no repo artifact re-anchored them | drift until owner audit; ~1 session of non-conforming publishes | Hardened | Spec materialized in repo (task 008); output contract + run log persisted in this state; bin/orchestrator-check enforces forward |
 | 2026-09-17 | 007-review | Environment | Sandbox has passwordless sudo; modulelint's sandboxed `run` of the elevated module executed real `sudo apt-get install -y flameshot` (package absent; nothing installed) | gate can reach real privileged tools on NOPASSWD hosts; seconds per gate run | Deferred (needs owner decision) | fix candidate: shadow sudo/pkexec in modulelint sandbox runs — dedicated prompt after owner sign-off; carried to tracker via task 008 |
 | 2026-09-17 | 007 | Environment | Branch-substitution rule used (4th time): pinned branch `arena/01a0accc-mintbutler` | none — rule worked | Scoped | — |
+| 2026-09-17 | 008 | Prompt | 008 §4 fact 7 assumed next harness stage letter was (z); (z) already existed via PR #5 | agent resolved correctly (stage (aa), documented in-file); near-collision cost nothing | Hardened | future prompts: derive the next stage letter from tests/run-tests.sh itself, not memory |
+| 2026-09-17 | 008 | Environment | Branch-substitution rule used (5th time): pinned branch `arena/01a0b02b-mintbutler` | none — rule worked | Scoped | — |
+| 2026-09-17 | orch | Environment | Platform worktree rewind reverted uncommitted verdict-state edits between tool calls; verdict block compared against HEAD (rewound too) instead of the pin, so the backup branch never fired | verdict state edits lost once; re-applied manually from record | Hardened | state edits are now backed up to .orchestrator/local/recovery/ immediately after editing, before any publish block; compare pending edits against the PIN, never HEAD |
 
 ## Run Log
 - 2026-09-16 | publish | 001-butler-core-discovery published on orchestrator branch (pre-adoption)
@@ -147,3 +150,6 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | publish | 008-spec-pin-orchestrator-check amended in place pre-dispatch (adds PR #5 Deferred gate-hardening row to its tracker deliverable); verdict-time state publish in same commit
 - 2026-09-17 | refresh-main | owner reported PR #5 merged (d576a42); main refreshed, net diff = exactly PR #5 content, no surprises
 - 2026-09-17 | distillation | MERGE-verdict knowledge from 007: elevate root-path invariant + mixed-undo/stub-test honesty convention — recorded in invariants; tracker carry mandated via 008 deliverable (3rd pre-dispatch amendment)
+- 2026-09-17 | dispatch | 008 dispatched (stub first line: mintbutler agent); operator opened PR #6 from pinned branch arena/01a0b02b-mintbutler
+- 2026-09-17 | refresh-main | PR #6 hand-back — main refreshed before two-dot diff
+- 2026-09-17 | verdict | 008 / PR #6 — MERGE advised: 3-stage gate (diff audit; spec sha256+blob-hash verified by orchestrator; harness 114/0 re-run; live orchestrator-check self-run 5/5 PASS incl. 10 grandfathered; deliverables 1:1 vs prompt incl. four byte-exact tracker bullets; stage (z)->(aa) adaptation documented and correct)
