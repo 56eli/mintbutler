@@ -1,0 +1,11 @@
+title: Screenshot studio
+description: >-
+  Installs Flameshot and points the Print Screen key at it. The package
+  install is a visible, confirmed elevated step and is not cleanly undoable;
+  the key binding is recorded and restored on undo. This module says so
+  instead of pretending.
+risk: elevated
+undo: true
+needs: [flameshot]
+asks: 0
+order: 50
