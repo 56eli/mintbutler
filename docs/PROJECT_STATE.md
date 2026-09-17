@@ -22,8 +22,15 @@ Canonical project tracker.
 - Module questions: a bounded series declared in the manifest (`asks: <n>`); optional values accept Enter to skip; safety confirmations stay with the menu; flows testable via scripted stdin — MODULE_SPEC §3 amended accordingly (owner, 2026-09-16). No standing exceptions: docs never drift from reality.
 - 23-line law: no menu or submenu screen may exceed 23 terminal lines — ever; screens paginate (entries page + one header + one footer). Enforced in the test suite. MODULE_SPEC §4 amended (owner, 2026-09-16).
 - desktop-shortcut-creator v1 ships two entry modes — Scan & place (default) and Custom — sharing `lib/desktop-entry.sh`; pagination lives in shared `lib/picker.sh` for reuse by future pickers (owner + hub review, 2026-09-16).
+- android-file-transfer seed cancelled by owner before implementation (2026-09-16): "I don't need adb phone mounting and file transfer functionality anymore" — docs aligned in task 006.
+- Module batch #1 approved (owner via hub, 2026-09-16): features appimage-installer, default-apps-editor, multimedia-codecs, screenshot-studio, printer-helper, system-report-pack, timeshift-guardian; fixes book-access-doctor, audio-repair; post-update-doctor deferred as a backlog stub. Build order: timeshift-guardian → audio-repair → appimage-installer → default-apps-editor → multimedia-codecs → screenshot-studio → printer-helper → system-report-pack → book-access-doctor. One reviewed PR per module; modulelint + suite green for each.
+- Menu ordering convention (binding, 2026-09-16): FEATURES sort first (`order:` 10, 20, 30…), FIXES after all features (`order:` 900, 910…); numbers unique, no ties. Final batch #1 order: 10 appimage-installer, 20 desktop-shortcut-creator, 30 default-apps-editor, 40 multimedia-codecs, 50 screenshot-studio, 60 printer-helper, 70 system-report-pack, 80 timeshift-guardian, 900 book-access-doctor, 910 audio-repair.
+- book-access-doctor v1 boundary (2026-09-16): remount may be a declared elevated step, but persistent `/etc/fstab` edits are out of scope — the module prints the line it would need; it does not write it.
 
 ## 4. Active Milestone & Current State
-- **Active Milestone:** v0.1 — menu script + module discovery + modulelint + the two seed modules.
-- **Current State:** core menu (PR #1, merged 2026-09-16) and `bin/modulelint` gate (PR #2, merged 2026-09-16) landed; desktop-shortcut-creator v1 (Scan & place + Custom modes, shared entry/picker libs, 23-line law) landed via PR for task 003.
-- **Immediate Next Task:** task 004 — seed module `android-file-transfer` (risk: elevated, undo: false).
+- **Active Milestone:** Module batch #1 (owner-approved 2026-09-16): nine modules — seven features, two fixes — one reviewed PR at a time on the v0.1 core.
+- **Current State:** v0.1 core complete under owner-revised scope: menu + discovery (PR #1), `bin/modulelint` gate (PR #2), desktop-shortcut-creator v1 (PR #3). The android-file-transfer seed was cancelled by the owner before implementation (2026-09-16). Menu-ordering convention, batch rulings, and docs alignment landed via PR for task 006.
+- **Immediate Next Task:** task 007 — module `timeshift-guardian` (elevated / snapshots additive), first in the owner's build order.
+
+## 5. Module Backlog
+- **post-update-doctor** (recorded 2026-09-16 — backlog stub, NOT implemented; deliberately no module folder): post-update regressions — Bluetooth autostart lost, NVIDIA fallback → wrong resolution, monitors mis-detected. Becomes a real task prompt when the chore bites.
