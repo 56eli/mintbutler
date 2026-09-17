@@ -33,7 +33,7 @@ plan() {
   printf '   Stop with guidance if Timeshift is not yet configured.\n'
   printf '3. Ask for a snapshot comment (default: mintbutler guard <YYYY-MM-DD>).\n'
   printf '4. Ask confirmation before running the single elevated snapshot step:\n'
-  printf '   sudo timeshift --create --comments <comment>\n'
+  printf '   %s\n' "$(elevate_command_line "timeshift --create --comments '<comment>'")"
   printf '5. Verify the snapshot via: %s\n' "$(elevate_command_line "${LIST_COMMAND}")"
   printf '6. Policy: snapshots are additive; this module never deletes them and offers no undo.\n'
 }
@@ -43,7 +43,7 @@ dry_run() {
   printf '\n'
   printf 'Exact commands (nothing runs now; values as written):\n'
   printf '  %s\n' "$(elevate_command_line "${LIST_COMMAND}")"
-  printf '  sudo timeshift --create --comments <comment>\n'
+  printf '  %s\n' "$(elevate_command_line "timeshift --create --comments '<comment>'")"
   printf '  %s\n' "$(elevate_command_line "${LIST_COMMAND}")"
   printf '  undo: none (snapshots are additive and remain until managed in Timeshift)\n'
 }
