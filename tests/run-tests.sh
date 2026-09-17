@@ -1413,6 +1413,401 @@ fi
 
 rm -rf "${ZBASE}"
 
+# ---------------------------------------------------------------------------
+# Stages (ab)-(af): default-apps-editor — stub xdg-mime, fake HOME, fake
+# XDG_DATA_DIRS tree of small .desktop files. No stage touches the real
+# ~/.config/mimeapps.list, the real application directories, or a real
+# xdg-mime; the stub below stands in for xdg-mime on PATH.
+# ---------------------------------------------------------------------------
+
+DA_MODULE="${REPO_ROOT}/modules/default-apps-editor/module.sh"
+DA_STUB_ROOT="${TMPBASE}/da-stubs"
+DA_DATA="${TMPBASE}/da-data"
+DA_STATE_REL=".local/state/mintbutler/default-apps-editor"
+mkdir -p "${DA_STUB_ROOT}" "${DA_DATA}/applications"
+
+# Stub: xdg-mime with the same user-level config file the real tool uses
+# (${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list). "default <id> <mime>"
+# assigns, "query default <mime>" reports. Simplification, honest for a
+# stub: <mime>= lines are matched anywhere in the file. Setting
+# XDG_MIME_STUB_QUERY_ALWAYS=<id> makes every query report <id> instead —
+# used to exercise the verify-mismatch rollback.
+cat <<'DA_XDG_MIME_STUB' > "${DA_STUB_ROOT}/xdg-mime"
+#!/usr/bin/env bash
+set -euo pipefail
+CONFIG="${XDG_CONFIG_HOME:-$HOME/.config}/mimeapps.list"
+op="${1:-}"
+case "${op}" in
+  default)
+    app_id="${2:-}"
+    mime="${3:-}"
+    if [[ -z "${app_id}" || -z "${mime}" ]]; then
+      printf 'xdg-mime-stub: default needs <app>.desktop and <mime>\n' >&2
+      exit 2
+    fi
+    mkdir -p "$(dirname "${CONFIG}")"
+    [[ -f "${CONFIG}" ]] || : > "${CONFIG}"
+    tmpout="${CONFIG}.stub-tmp.$$"
+    keep=0
+    : > "${tmpout}"
+    while IFS= read -r ln || [[ -n "${ln}" ]]; do
+      if [[ "${ln}" == "["*"]" ]]; then
+        keep=0
+        if [[ "${ln}" == "[Default Applications]" ]]; then
+          keep=1
+        fi
+      fi
+      if [[ "${keep}" == "1" && "${ln}" == "${mime}="* ]]; then
+        continue
+      fi
+      printf '%s\n' "${ln}" >> "${tmpout}"
+    done < "${CONFIG}"
+    printf '%s=%s\n' "${mime}" "${app_id}" >> "${tmpout}"
+    mv "${tmpout}" "${CONFIG}"
+    exit 0
+    ;;
+  query)
+    sub="${2:-}"
+    mime="${3:-}"
+    if [[ "${sub}" != "default" || -z "${mime}" ]]; then
+      exit 0
+    fi
+    if [[ -n "${XDG_MIME_STUB_QUERY_ALWAYS:-}" ]]; then
+      printf '%s\n' "${XDG_MIME_STUB_QUERY_ALWAYS}"
+      exit 0
+    fi
+    found=""
+    if [[ -f "${CONFIG}" ]]; then
+      while IFS= read -r ln || [[ -n "${ln}" ]]; do
+        if [[ "${ln}" == "${mime}="* ]]; then
+          found="${ln#*=}"
+        fi
+      done < "${CONFIG}"
+    fi
+    if [[ -n "${found}" ]]; then
+      printf '%s\n' "${found}"
+    fi
+    exit 0
+    ;;
+  *)
+    printf 'xdg-mime-stub: unsupported operation: %s\n' "${op}" >&2
+    exit 2
+    ;;
+esac
+DA_XDG_MIME_STUB
+chmod +x "${DA_STUB_ROOT}/xdg-mime"
+
+# Fake XDG_DATA_DIRS tree of small .desktop files. No file claims
+# application/zip — stage (ae) relies on that.
+cat <<'EOF' > "${DA_DATA}/applications/firefox.desktop"
+[Desktop Entry]
+Type=Application
+Name=Firefox Web Browser
+Exec=firefox %u
+MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
+EOF
+cat <<'EOF' > "${DA_DATA}/applications/web-epiphany.desktop"
+[Desktop Entry]
+Type=Application
+Name=Web
+Exec=epiphany %u
+MimeType=text/html;x-scheme-handler/http;x-scheme-handler/https;
+EOF
+cat <<'EOF' > "${DA_DATA}/applications/image-viewer.desktop"
+[Desktop Entry]
+Type=Application
+Name=Image Viewer
+Exec=eog %f
+MimeType=image/png;image/jpeg;
+EOF
+cat <<'EOF' > "${DA_DATA}/applications/video-player.desktop"
+[Desktop Entry]
+Type=Application
+Name=Video Player
+Exec=mpv %f
+MimeType=video/mp4;
+EOF
+cat <<'EOF' > "${DA_DATA}/applications/no-mime.desktop"
+[Desktop Entry]
+Type=Application
+Name=No Mime App
+Exec=/usr/bin/true
+EOF
+
+# Stage (ab): gate, scan, list, plan/dry-run screens, non-interactive run.
+printf 'Stage ab: default-apps-editor gate, scan, list, plan, non-interactive\n'
+output_ab_scan=""
+code_ab_scan="0"
+output_ab_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_ab_scan="$?"
+if [[ "${code_ab_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with default-apps-editor present (got ${code_ab_scan})"
+else
+  pass "butler --scan exits 0 with default-apps-editor present"
+fi
+if printf '%s\n' "${output_ab_scan}" | grep -q "PASS default-apps-editor"; then
+  pass "butler --scan reports PASS default-apps-editor"
+else
+  fail "butler --scan reports PASS default-apps-editor"
+fi
+
+output_ab_lint=""
+code_ab_lint="0"
+output_ab_lint="$(cd "${REPO_ROOT}" && bin/modulelint 2>&1)" || code_ab_lint="$?"
+if [[ "${code_ab_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 with default-apps-editor present (got ${code_ab_lint})"
+else
+  pass "bin/modulelint exits 0 with default-apps-editor present"
+fi
+if printf '%s\n' "${output_ab_lint}" | grep -q "PASS default-apps-editor"; then
+  pass "bin/modulelint reports PASS default-apps-editor"
+else
+  fail "bin/modulelint reports PASS default-apps-editor"
+fi
+
+output_ab_list=""
+code_ab_list="0"
+output_ab_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_ab_list="$?"
+if [[ "${code_ab_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_ab_list})"
+else
+  pass "butler --list exits 0"
+fi
+if printf '%s\n' "${output_ab_list}" | grep -q "default-apps-editor: Default apps editor"; then
+  pass "butler --list shows default-apps-editor: Default apps editor"
+else
+  fail "butler --list shows default-apps-editor: Default apps editor"
+fi
+if printf '%s\n' "${output_ab_list}" | grep -q "desktop-shortcut-creator" \
+  && printf '%s\n' "${output_ab_list}" | grep -q "screenshot-studio"; then
+  pass "butler --list still shows the earlier modules"
+else
+  fail "butler --list still shows the earlier modules"
+fi
+
+DA_AB_HOME="${TMPBASE}/da-home-ab"
+mkdir -p "${DA_AB_HOME}"
+output_ab_plan=""
+code_ab_plan="0"
+output_ab_plan="$(PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AB_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+  bash "${DA_MODULE}" plan < /dev/null 2>&1)" || code_ab_plan="$?"
+da_ab_plan_lines="$(printf '%s\n' "${output_ab_plan}" | wc -l)"
+if [[ "${code_ab_plan}" -eq 0 && -n "${output_ab_plan}" ]]; then
+  pass "plan exits 0 with output"
+else
+  fail "plan exits 0 with output (got ${code_ab_plan})"
+fi
+if [[ "${da_ab_plan_lines}" -le 23 ]]; then
+  pass "plan fits the 23-line law (${da_ab_plan_lines} lines)"
+else
+  fail "plan fits the 23-line law (${da_ab_plan_lines} lines)"
+fi
+
+output_ab_dry=""
+code_ab_dry="0"
+output_ab_dry="$(PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AB_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+  bash "${DA_MODULE}" dry-run < /dev/null 2>&1)" || code_ab_dry="$?"
+da_ab_dry_lines="$(printf '%s\n' "${output_ab_dry}" | wc -l)"
+if [[ "${code_ab_dry}" -eq 0 && -n "${output_ab_dry}" ]]; then
+  pass "dry-run exits 0 with output"
+else
+  fail "dry-run exits 0 with output (got ${code_ab_dry})"
+fi
+if [[ "${da_ab_dry_lines}" -le 23 ]]; then
+  pass "dry-run fits the 23-line law (${da_ab_dry_lines} lines)"
+else
+  fail "dry-run fits the 23-line law (${da_ab_dry_lines} lines)"
+fi
+if printf '%s\n' "${output_ab_dry}" | grep -q "xdg-mime query default" \
+  && printf '%s\n' "${output_ab_dry}" | grep -q "xdg-mime default"; then
+  pass "dry-run shows the exact xdg-mime commands in query form"
+else
+  fail "dry-run shows the exact xdg-mime commands in query form"
+fi
+if printf '%s\n' "${output_ab_dry}" | grep -q "mimeapps.list.backup"; then
+  pass "dry-run shows the backup path"
+else
+  fail "dry-run shows the backup path"
+fi
+
+DA_AB_HOME2="${TMPBASE}/da-home-ab2"
+DA_AB_HOME2_BEFORE="${TMPBASE}/da-home-ab2-before"
+mkdir -p "${DA_AB_HOME2}"
+cp -a "${DA_AB_HOME2}" "${DA_AB_HOME2_BEFORE}"
+stderr_ab=""
+code_ab_run="0"
+stderr_ab="$(cd "${REPO_ROOT}" && PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AB_HOME2}" XDG_DATA_DIRS="${DA_DATA}" \
+  bash modules/default-apps-editor/module.sh run < /dev/null 2>&1 >/dev/null)" || code_ab_run="$?"
+if [[ "${code_ab_run}" -eq 1 ]]; then
+  pass "non-interactive run exits 1"
+else
+  fail "non-interactive run exits 1 (got ${code_ab_run})"
+fi
+da_ab_err_lines="$(printf '%s\n' "${stderr_ab}" | grep -c . || true)"
+if [[ "${da_ab_err_lines}" == "1" ]] && printf '%s\n' "${stderr_ab}" | grep -qi "interactive"; then
+  pass "non-interactive run prints one plain stderr line"
+else
+  fail "non-interactive run prints one plain stderr line (got ${da_ab_err_lines} lines)"
+fi
+if diff -r "${DA_AB_HOME2}" "${DA_AB_HOME2_BEFORE}" >/dev/null 2>&1; then
+  pass "non-interactive run writes nothing to the fake HOME"
+else
+  fail "non-interactive run modified the fake HOME"
+fi
+
+# Stage (ac): happy path — category 1, app 1, confirm y.
+printf 'Stage ac: default-apps-editor happy path\n'
+DA_AC_HOME="${TMPBASE}/da-home-ac"
+mkdir -p "${DA_AC_HOME}/.config"
+DA_AC_CONFIG="${DA_AC_HOME}/.config/mimeapps.list"
+DA_AC_PRERUN="${TMPBASE}/da-ac-prerun.mimeapps"
+cat <<'EOF' > "${DA_AC_CONFIG}"
+[Default Applications]
+text/plain=org.gnome.gedit.desktop
+EOF
+cp "${DA_AC_CONFIG}" "${DA_AC_PRERUN}"
+output_ac=""
+code_ac="0"
+output_ac="$(printf '1\n1\ny\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AC_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+  bash "${DA_MODULE}" run 2>&1)" || code_ac="$?"
+if [[ "${code_ac}" -eq 0 ]]; then
+  pass "happy path run exits 0"
+else
+  fail "happy path run exits 0 (got ${code_ac})"
+fi
+if printf '%s\n' "${output_ac}" | grep -q "current:" && printf '%s\n' "${output_ac}" | grep -q "new:"; then
+  pass "happy path output shows current-versus-new"
+else
+  fail "happy path output shows current-versus-new"
+fi
+for da_type in text/html x-scheme-handler/http x-scheme-handler/https; do
+  if grep -q "^${da_type}=firefox.desktop$" "${DA_AC_CONFIG}"; then
+    pass "mimeapps.list assigns firefox.desktop to ${da_type}"
+  else
+    fail "mimeapps.list assigns firefox.desktop to ${da_type}"
+  fi
+done
+if grep -q "^text/plain=org.gnome.gedit.desktop$" "${DA_AC_CONFIG}"; then
+  pass "mimeapps.list keeps the pre-existing assignment"
+else
+  fail "mimeapps.list lost the pre-existing assignment"
+fi
+DA_AC_STATE="${DA_AC_HOME}/${DA_STATE_REL}"
+if [[ -f "${DA_AC_STATE}/mimeapps.list.backup" ]] \
+  && cmp -s "${DA_AC_STATE}/mimeapps.list.backup" "${DA_AC_PRERUN}"; then
+  pass "state dir holds the backup byte-equal to the pre-run file"
+else
+  fail "state dir holds the backup byte-equal to the pre-run file"
+fi
+if [[ -f "${DA_AC_STATE}/changes.record" ]] \
+  && grep -q "ASSIGNED text/html=firefox.desktop" "${DA_AC_STATE}/changes.record"; then
+  pass "state dir holds a changes record"
+else
+  fail "state dir holds a changes record"
+fi
+
+# Stage (ad): undo after (ac) restores the pre-run file exactly.
+printf 'Stage ad: default-apps-editor undo\n'
+output_ad=""
+code_ad="0"
+output_ad="$(HOME="${DA_AC_HOME}" bash "${DA_MODULE}" undo < /dev/null 2>&1)" || code_ad="$?"
+if [[ "${code_ad}" -eq 0 ]]; then
+  pass "undo exits 0"
+else
+  fail "undo exits 0 (got ${code_ad})"
+fi
+if cmp -s "${DA_AC_CONFIG}" "${DA_AC_PRERUN}"; then
+  pass "undo restores mimeapps.list byte-identical to the pre-run file"
+else
+  fail "undo did not restore mimeapps.list byte-identically"
+fi
+if [[ ! -d "${DA_AC_STATE}" ]]; then
+  pass "undo deletes the state dir"
+else
+  fail "undo left the state dir behind"
+fi
+if printf '%s\n' "${output_ad}" | grep -q "x-scheme-handler/https=firefox.desktop" \
+  && printf '%s\n' "${output_ad}" | grep -q "x-scheme-handler/http=firefox.desktop" \
+  && printf '%s\n' "${output_ad}" | grep -q "text/html=firefox.desktop"; then
+  if [[ "$(printf '%s\n' "${output_ad}" | grep -n "x-scheme-handler/https=firefox.desktop" | cut -d: -f1)" -lt "$(printf '%s\n' "${output_ad}" | grep -n "text/html=firefox.desktop" | cut -d: -f1)" ]]; then
+    pass "undo prints the recorded assignments reversed"
+  else
+    fail "undo printed assignments in forward order"
+  fi
+else
+  fail "undo prints the recorded assignments reversed"
+fi
+output_ad2=""
+code_ad2="0"
+output_ad2="$(HOME="${DA_AC_HOME}" bash "${DA_MODULE}" undo < /dev/null 2>&1)" || code_ad2="$?"
+if [[ "${code_ad2}" -eq 0 ]] && printf '%s\n' "${output_ad2}" | grep -qi "nothing to undo"; then
+  pass "second undo reports Nothing to undo and exits 0"
+else
+  fail "second undo reports Nothing to undo and exits 0 (got ${code_ad2})"
+fi
+
+# Stage (ae): no-candidate path — nothing claims application/zip.
+printf 'Stage ae: default-apps-editor no-candidate path\n'
+DA_AE_HOME="${TMPBASE}/da-home-ae"
+DA_AE_HOME_BEFORE="${TMPBASE}/da-home-ae-before"
+mkdir -p "${DA_AE_HOME}"
+cp -a "${DA_AE_HOME}" "${DA_AE_HOME_BEFORE}"
+stderr_ae=""
+code_ae="0"
+stderr_ae="$(printf '8\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AE_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+  bash "${DA_MODULE}" run 2>&1 >/dev/null)" || code_ae="$?"
+if [[ "${code_ae}" -eq 1 ]]; then
+  pass "no-candidate run exits 1"
+else
+  fail "no-candidate run exits 1 (got ${code_ae})"
+fi
+if printf '%s\n' "${stderr_ae}" | grep -q "application/zip"; then
+  pass "no-candidate line names the type searched"
+else
+  fail "no-candidate line names the type searched"
+fi
+if diff -r "${DA_AE_HOME}" "${DA_AE_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "no-candidate run writes nothing (no state dir)"
+else
+  fail "no-candidate run modified the fake HOME"
+fi
+
+# Stage (af): verification-failure path — the stub accepts writes but every
+# query reports a different app; the module must roll the file back.
+printf 'Stage af: default-apps-editor verify-failure rollback\n'
+DA_AF_HOME="${TMPBASE}/da-home-af"
+mkdir -p "${DA_AF_HOME}/.config"
+DA_AF_CONFIG="${DA_AF_HOME}/.config/mimeapps.list"
+DA_AF_PRERUN="${TMPBASE}/da-af-prerun.mimeapps"
+cat <<'EOF' > "${DA_AF_CONFIG}"
+[Default Applications]
+video/mp4=old-player.desktop
+EOF
+cp "${DA_AF_CONFIG}" "${DA_AF_PRERUN}"
+stderr_af=""
+code_af="0"
+stderr_af="$(printf '4\n1\ny\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AF_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+  XDG_MIME_STUB_QUERY_ALWAYS=someone-else.desktop bash "${DA_MODULE}" run 2>&1 >/dev/null)" || code_af="$?"
+if [[ "${code_af}" -eq 1 ]]; then
+  pass "verify-failure run exits 1"
+else
+  fail "verify-failure run exits 1 (got ${code_af})"
+fi
+if printf '%s\n' "${stderr_af}" | grep -qi "verification failed"; then
+  pass "verify-failure prints a plain error"
+else
+  fail "verify-failure prints a plain error"
+fi
+if cmp -s "${DA_AF_CONFIG}" "${DA_AF_PRERUN}"; then
+  pass "verify-failure auto-restores the file byte-equal to the pre-run state"
+else
+  fail "verify-failure did not restore the file byte-for-byte"
+fi
+if [[ ! -d "${DA_AF_HOME}/${DA_STATE_REL}" ]]; then
+  pass "verify-failure leaves no state dir"
+else
+  fail "verify-failure left a state dir behind"
+fi
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1

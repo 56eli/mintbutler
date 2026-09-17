@@ -1,0 +1,11 @@
+title: Default apps editor
+description: >-
+  Changes the default application for a MIME type — pick a category or type
+  your own, see the current default versus the new one, then apply. Your
+  mimeapps.list is backed up before the first change and restored byte for
+  byte on undo.
+risk: low
+undo: true
+needs: [xdg-mime]
+asks: 4
+order: 30
