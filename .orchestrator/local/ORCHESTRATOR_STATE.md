@@ -21,7 +21,7 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 007 | .orchestrator/prompts/007-screenshot-studio.md | screenshot-studio: flameshot install + Print Screen dconf rebind, recorded-restore undo, lib/elevate.sh debut | arena/01a0accc-mintbutler (pinned; substitution recorded) | #5 | Merged 2026-09-17 (merge commit d576a42) |
 | 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (+ PR #5 distillation/deferred rows) | arena/01a0b02b-mintbutler (pinned; substitution recorded) | #6 | Merged 2026-09-17 (merge commit 1255277) |
 | 009 | .orchestrator/prompts/009-default-apps-editor.md | default-apps-editor: xdg-mime defaults with current-vs-new display, byte-for-byte mimeapps.list backup/restore undo | arena/01a0b065-mintbutler (pinned; substitution recorded) | #7 | Merged 2026-09-17 (merge commit 9674a43) |
-| 010 | .orchestrator/prompts/010-appimage-installer.md | appimage-installer: user-level AppImage install reusing lib/desktop-entry.sh, copy-never-move, undo removes entry+copy | — | — | Published + dispatched 2026-09-17 |
+| 010 | .orchestrator/prompts/010-appimage-installer.md | appimage-installer: user-level AppImage install reusing lib/desktop-entry.sh, copy-never-move, undo removes entry+copy | arena/01a0b0c2-mintbutler + arena/01a0b14e-mintbutler (duplicate dispatch — see 2026-09-17 process note) | #8 (+#9 follow-up) | MERGED BEFORE REVIEW 2026-09-17 (d046064, b930e0b) — health+content branch run post-hoc: FULLY GREEN, no defects, no follow-up |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -45,8 +45,8 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] 008: spec pin + bin/orchestrator-check — PR #6 merged 2026-09-17 (1255277); mechanical compliance gate live
 - [x] 007: screenshot-studio — PR #5 merged 2026-09-17 (d576a42)
 - [x] 009: default-apps-editor — PR #7 merged 2026-09-17 (9674a43)
-- [~] 010: appimage-installer — IN PROGRESS (build order 3; order 10; reuses lib/desktop-entry.sh); prompt published + dispatched
-- [ ] 011: timeshift-guardian (Pending — build order 4; elevated, snapshots additive, order 80)
+- [x] 010: appimage-installer — PR #8 (+#9) merged 2026-09-17 (d046064, b930e0b) before review; post-hoc gate 199/0 + deliverables 1:1
+- [~] 011: timeshift-guardian — IN PROGRESS (build order 4; elevated, snapshots additive, order 80); prompt published + dispatched
 - [ ] 012: audio-repair (Pending — build order 5; elevated, config-backup undo, diagnose-first, order 910)
 - [ ] 013: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
 - [ ] 014: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
@@ -125,6 +125,7 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 | 2026-09-17 | 008 | Environment | Branch-substitution rule used (5th time): pinned branch `arena/01a0b02b-mintbutler` | none — rule worked | Scoped | — |
 | 2026-09-17 | orch | Environment | Platform worktree rewind reverted uncommitted verdict-state edits between tool calls; verdict block compared against HEAD (rewound too) instead of the pin, so the backup branch never fired | verdict state edits lost once; re-applied manually from record | Hardened | state edits are now backed up to .orchestrator/local/recovery/ immediately after editing, before any publish block; compare pending edits against the PIN, never HEAD |
 | 2026-09-17 | 009 | Environment | Branch-substitution rule used (6th time): pinned branch `arena/01a0b065-mintbutler` | none — rule worked | Scoped | — |
+| 2026-09-17 | 010 | Environment | Duplicate dispatch: task 010 ran in two agent sessions (PR #8 full delivery, PR #9 refinements) and both merged before orchestrator review; a third dispatch correctly reported 'already merged' instead of redoing work | no defects — post-hoc health+content gate fully green; process lesson only | Hardened | operator confirms no task is in flight before pasting a stub (the 'PR open?' question is that checkpoint); orchestrator ran the merged-before-reviewed branch per spec |
 
 ## Run Log
 - 2026-09-16 | publish | 001-butler-core-discovery published on orchestrator branch (pre-adoption)
@@ -165,3 +166,7 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | refresh-main | owner reported PR #7 merged (9674a43); main refreshed, net diff = exactly PR #7 content; desktop-entry.sh API re-read for quote-by-copy in 010
 - 2026-09-17 | publish | 010-appimage-installer published (conforming form; stage letters (ag)-(al) derived from harness)
 - 2026-09-17 | dispatch | 010 handed to operator; stub first line: mintbutler agent
+- 2026-09-17 | refresh-main | duplicate-dispatch report → main refreshed: PR #8 (d046064) + PR #9 (b930e0b) merged before review, both task 010 work
+- 2026-09-17 | verdict | 010 / PR #8+#9 (merged-before-reviewed branch): health battery at b930e0b — suite 199/0, modulelint 4/4, scan/list/dry-run clean, bash -n clean, frozen surfaces untouched; content — deliverables 1:1 vs prompt 010 §6 (byte-exact manifest + tracker §4; stages ag-al; PR #9 refinements align INSTALL_DIR with the prompt and extend validate/trust to the already-done path). VERDICT: green, no defects, no follow-up
+- 2026-09-17 | publish | 011-timeshift-guardian published (conforming form)
+- 2026-09-17 | dispatch | 011 handed to operator; stub first line: mintbutler agent
