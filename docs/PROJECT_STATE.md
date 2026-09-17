@@ -33,8 +33,8 @@ Canonical project tracker.
 
 ## 4. Active Milestone & Current State
 - **Active Milestone:** Module batch #1 (owner-approved 2026-09-16): nine modules — seven features, two fixes — one reviewed PR at a time on the v0.1 core.
-- **Current State:** v0.1 core complete; batch #1 in progress — screenshot-studio (flameshot install + Print Screen rebind with recorded-restore undo, shared `lib/elevate.sh` debut) landed via PR for task 007. Build order revised by owner 2026-09-16: screenshot-studio first.
-- **Immediate Next Task:** task 008 — module `default-apps-editor` (low / undo:true; xdg-mime defaults with current-vs-new display), second in the owner's revised build order.
+- **Current State:** v0.1 core complete; batch #1 in progress — screenshot-studio landed (PR #5); governing orchestrator spec pinned byte-faithful with `bin/orchestrator-check` mechanical compliance gate (PR #6).
+- **Immediate Next Task:** task 010 — module `appimage-installer` (low / undo:true; reuses `lib/desktop-entry.sh`), third in the owner's revised build order.
 
 ## 5. Module Backlog
 - **post-update-doctor** (recorded 2026-09-16 — backlog stub, NOT implemented; deliberately no module folder): post-update regressions — Bluetooth autostart lost, NVIDIA fallback → wrong resolution, monitors mis-detected. Becomes a real task prompt when the chore bites.
