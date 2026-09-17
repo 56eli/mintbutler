@@ -27,20 +27,19 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - [x] PR #2: bin/modulelint contract validator (Merged 2026-09-16)
 - [x] PR #3: desktop-shortcut-creator v1 (Merged 2026-09-16)
 - [~] 005: android-file-transfer — CANCELLED by owner 2026-09-16 before dispatch
-- [ ] 006: batch #1 convention + docs alignment (PR #4 open — MERGE advised 2026-09-16)
-- [ ] 007: timeshift-guardian (Pending — build order 1; elevated, snapshots additive, order 80)
+- [x] 006: batch #1 convention + docs alignment (PR #4 merged 2026-09-17, commit 8d0bd3e)
+- [~] 007: screenshot-studio — IN PROGRESS (owner-revised head of build order; prompt published, tip 070d9a1; elevated, flameshot + dconf Print rebind, lib/elevate.sh debut, order 50)
 - [ ] 008: audio-repair (Pending — build order 2; elevated, config-backup undo, diagnose-first, order 910)
 - [ ] 009: appimage-installer (Pending — order 10; reuses lib/desktop-entry.sh)
 - [ ] 010: default-apps-editor (Pending — order 30; xdg-mime, current-vs-new display)
 - [ ] 011: multimedia-codecs (Pending — order 40; elevated install, honest no-undo)
-- [ ] 012: screenshot-studio (Pending — order 50; flameshot + dconf PrintScreen rebind with recorded old binding; mixed undo)
 - [ ] 013: printer-helper (Pending — order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
 - [ ] 014: system-report-pack (Pending — order 70; additive report file, never installs inxi — plain-tool fallback)
 - [ ] 015: book-access-doctor (Pending — build order last; order 900; targeted grants only, never chmod -R 777; fstab PRINT-only ruling)
 
 ## Batch #1 Master Data (owner-approved 2026-09-16)
 - Convention: FEATURES order 10/20/30… first; FIXES 900/910… after all features; unique numbers, no ties. Final table: 10 appimage-installer, 20 desktop-shortcut-creator, 30 default-apps-editor, 40 multimedia-codecs, 50 screenshot-studio, 60 printer-helper, 70 system-report-pack, 80 timeshift-guardian, 900 book-access-doctor, 910 audio-repair.
-- Build order: timeshift-guardian → audio-repair → appimage-installer → default-apps-editor → multimedia-codecs → screenshot-studio → printer-helper → system-report-pack → book-access-doctor.
+- Build order (owner revision 2026-09-16, effective with PR #4): screenshot-studio → default-apps-editor → appimage-installer → timeshift-guardian → audio-repair → multimedia-codecs → printer-helper → system-report-pack → book-access-doctor. (Owner typed screenshot-studio twice — treated as typo, flagged.)
 - Rulings: book-access-doctor remount = declared elevated OK; persistent /etc/fstab edits OUT of v1 (print, don't write). post-update-doctor = backlog stub only (no folder). Hub notes MB-001 in flight; PRs landing mid-review expected — record pins sha, MB-002 catches delta.
 
 ## Interrupted Work
