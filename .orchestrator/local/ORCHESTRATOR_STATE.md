@@ -17,7 +17,7 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 003 | .orchestrator/prompts/003-desktop-shortcut-creator.md | desktop-shortcut-creator v1: scan & place + custom modes, shared entry/picker libs, spec amendments, 23-line law | arena/01a0ac62-mintbutler (pinned; substitution recorded) | #3 | Merged 2026-09-16 (merge commit 52963a4) |
 | 004 | .orchestrator/prompts/004-revise-shortcut-creator-sc2086.md | REVISION of PR #3: shellcheck-clean test-launch word splitting | arena/01a0ac62-mintbutler (continued) | #3 | Completed 2026-09-16 — fix verified, folded into PR #3 verdict |
 | 005 | .orchestrator/prompts/005-android-file-transfer.md | seed module android-file-transfer + lib/elevate.sh (completes v0.1) | — | — | CANCELLED 2026-09-16 — owner withdrew the need; prompt never dispatched (retained, bannered, DO NOT RUN) |
-| 006 | .orchestrator/prompts/006-batch1-convention-docs.md | batch #1 kickoff: menu-ordering convention, docs alignment, backlog stub | docs/batch1-convention (or pinned session branch) | — | Dispatched 2026-09-16 |
+| 006 | .orchestrator/prompts/006-batch1-convention-docs.md | batch #1 kickoff: menu-ordering convention, docs alignment, backlog stub | arena/01a0acb9-mintbutler (pinned; substitution recorded) | #4 | Reviewed 2026-09-16 — MERGE advised, awaiting operator merge |
 
 ## Active Milestone
 v0.1 — menu script + module discovery + modulelint + the two seed modules.
@@ -27,7 +27,7 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - [x] PR #2: bin/modulelint contract validator (Merged 2026-09-16)
 - [x] PR #3: desktop-shortcut-creator v1 (Merged 2026-09-16)
 - [~] 005: android-file-transfer — CANCELLED by owner 2026-09-16 before dispatch
-- [ ] 006: batch #1 convention + docs alignment (In Progress — dispatched 2026-09-16)
+- [ ] 006: batch #1 convention + docs alignment (PR #4 open — MERGE advised 2026-09-16)
 - [ ] 007: timeshift-guardian (Pending — build order 1; elevated, snapshots additive, order 80)
 - [ ] 008: audio-repair (Pending — build order 2; elevated, config-backup undo, diagnose-first, order 910)
 - [ ] 009: appimage-installer (Pending — order 10; reuses lib/desktop-entry.sh)
@@ -86,3 +86,4 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 | 2026-09-16 | 003 | Repository | `bin/modulelint` crashed on `-n` tokens (`basename: invalid option`) inside `check_write_targets` | modulelint errored on scripts containing `[[ -n … ]]`; agent fixed within allowed modify scope (`basename --`) | Scoped | Fixed in PR #3; future lint edits must keep `--` guards on token-parsing utility calls |
 | 2026-09-16 | 003 | Environment | Branch-substitution rule used again: pinned branch `arena/01a0ac62-mintbutler` | none — rule worked | Scoped | — |
 | 2026-09-16 | 003-review | Repository | SC2086 exposure in delivered module (`setsid ${launch_cmd}`) — gate hard-fails it wherever shellcheck exists | REVISE issued (prompt 004); not blocking on owner's shellcheck-less Mint | Hardened | Revision 004 fixes; future module prompts: remind agents the gate SC2086-fails unquoted expansions when shellcheck is present |
+| 2026-09-16 | 006 | Environment | Branch-substitution rule used (3rd time): pinned branch `arena/01a0acb9-mintbutler` | none — rule worked | Scoped | — |
