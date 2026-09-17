@@ -727,6 +727,9 @@ case "${operation}" in
     exit 0
     ;;
   write)
+    if [[ "${DCONF_STUB_READONLY:-0}" == "1" ]]; then
+      exit 0
+    fi
     key="$(store_normalize "${2:-}")"
     value="${3:-}"
     if [[ -z "${key}" ]]; then
@@ -738,6 +741,9 @@ case "${operation}" in
     exit 0
     ;;
   reset)
+    if [[ "${DCONF_STUB_READONLY:-0}" == "1" ]]; then
+      exit 0
+    fi
     if [[ "${2:-}" == "-f" ]]; then
       store_without_tree "$(store_normalize "${3:-}")"
       exit 0
@@ -1031,10 +1037,9 @@ SS_W_HOME="${TMPBASE}/ss-home-w"
 SS_W_STORE="${TMPBASE}/ss-store-w.txt"
 mkdir -p "${SS_W_HOME}"
 printf '%s\t%s\n' "${SS_BUILTIN}" "['Print']" > "${SS_W_STORE}"
-output_w1=""
 code_w1="0"
-output_w1="$(PATH="${SS_BIN_REBIND}" HOME="${SS_W_HOME}" DCONF_STUB_STORE="${SS_W_STORE}" \
-  "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null 2>&1)" || code_w1="$?"
+PATH="${SS_BIN_REBIND}" HOME="${SS_W_HOME}" DCONF_STUB_STORE="${SS_W_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null >"${TMPBASE}/ss-w1.stdout" 2>&1 || code_w1="$?"
 if [[ "${code_w1}" -eq 0 ]]; then
   pass "first idempotency run exits 0"
 else
@@ -1158,6 +1163,71 @@ if [[ ! -e "${SS_Y_HOME}/${SS_STATE_REL}" ]]; then
   pass "dry-run records no state"
 else
   fail "dry-run records no state"
+fi
+
+# Stage (z): verify-mismatch path and unset built-in key.
+printf 'Stage z: screenshot-studio verify mismatch and unset built-in\n'
+SS_Z_HOME="${TMPBASE}/ss-home-z"
+SS_Z_STORE="${TMPBASE}/ss-store-z.txt"
+mkdir -p "${SS_Z_HOME}"
+: > "${SS_Z_STORE}"
+cp "${SS_Z_STORE}" "${SS_Z_STORE}.seeded"
+USED_Z_STDERR="${TMPBASE}/ss-z.stderr"
+code_z="0"
+PATH="${SS_BIN_REBIND}" HOME="${SS_Z_HOME}" DCONF_STUB_STORE="${SS_Z_STORE}" DCONF_STUB_READONLY=1 \
+  "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null >"${TMPBASE}/ss-z.stdout" 2>"${USED_Z_STDERR}" || code_z="$?"
+if [[ "${code_z}" -eq 1 ]]; then
+  pass "verify mismatch exits 1"
+else
+  fail "verify mismatch exits 1 (got ${code_z})"
+fi
+if grep -q "Verification failed" "${USED_Z_STDERR}"; then
+  pass "verify mismatch prints a plain error"
+else
+  fail "verify mismatch prints a plain error"
+fi
+if cmp -s "${SS_Z_STORE}" "${SS_Z_STORE}.seeded"; then
+  pass "verify mismatch leaves the stub store byte-identical"
+else
+  fail "verify mismatch leaves the stub store byte-identical"
+fi
+SS_Z_STATE="${SS_Z_HOME}/${SS_STATE_REL}"
+if [[ -f "${SS_Z_STATE}" ]] && grep -q "screenshot=UNSET" "${SS_Z_STATE}"; then
+  pass "verify mismatch keeps the recorded state for undo"
+else
+  fail "verify mismatch keeps the recorded state for undo"
+fi
+
+SS_Z2_HOME="${TMPBASE}/ss-home-z2"
+SS_Z2_STORE="${TMPBASE}/ss-store-z2.txt"
+mkdir -p "${SS_Z2_HOME}"
+: > "${SS_Z2_STORE}"
+code_z2="0"
+PATH="${SS_BIN_REBIND}" HOME="${SS_Z2_HOME}" DCONF_STUB_STORE="${SS_Z2_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null >"${TMPBASE}/ss-z2.stdout" 2>&1 || code_z2="$?"
+if [[ "${code_z2}" -eq 0 ]]; then
+  pass "unset built-in run exits 0"
+else
+  fail "unset built-in run exits 0 (got ${code_z2})"
+fi
+ss_z2_builtin="$(ss_store_get "${SS_Z2_STORE}" "${SS_BUILTIN}")"
+if [[ -z "${ss_z2_builtin}" ]]; then
+  pass "unset built-in key is left alone (not created)"
+else
+  fail "unset built-in key is left alone (not created, got '${ss_z2_builtin}')"
+fi
+code_z2_undo="0"
+PATH="${SS_BIN_REBIND}" HOME="${SS_Z2_HOME}" DCONF_STUB_STORE="${SS_Z2_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" undo < /dev/null >"${TMPBASE}/ss-z2-undo.stdout" 2>&1 || code_z2_undo="$?"
+if [[ "${code_z2_undo}" -eq 0 ]]; then
+  pass "unset built-in undo exits 0"
+else
+  fail "unset built-in undo exits 0 (got ${code_z2_undo})"
+fi
+if [[ ! -s "${SS_Z2_STORE}" ]]; then
+  pass "unset built-in undo leaves the stub store empty"
+else
+  fail "unset built-in undo leaves the stub store empty"
 fi
 
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
