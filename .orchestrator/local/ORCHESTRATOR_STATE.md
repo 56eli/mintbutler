@@ -41,7 +41,6 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 ## Batch #1 Master Data (owner-approved 2026-09-16)
 - Convention: FEATURES order 10/20/30… first; FIXES 900/910… after all features; unique numbers, no ties. Final table: 10 appimage-installer, 20 desktop-shortcut-creator, 30 default-apps-editor, 40 multimedia-codecs, 50 screenshot-studio, 60 printer-helper, 70 system-report-pack, 80 timeshift-guardian, 900 book-access-doctor, 910 audio-repair.
 - Build order (owner revision 2026-09-16, effective with PR #4): screenshot-studio → default-apps-editor → appimage-installer → timeshift-guardian → audio-repair → multimedia-codecs → printer-helper → system-report-pack → book-access-doctor. (Owner typed screenshot-studio twice — treated as typo, flagged.)
-- Orchestrator workflow preference (owner 2026-09-17): after every plan of actions, always attach the dispatch-agent stub — the copy-paste block to fetch and verify the published prompt, e.g. `git fetch --depth 1 origin +arena/01a0abf2-mintbutler:refs/remotes/origin/_orch && git show refs/remotes/origin/_orch:.orchestrator/prompts/<NNN>-<name>.md | head`
 - Rulings: book-access-doctor remount = declared elevated OK; persistent /etc/fstab edits OUT of v1 (print, don't write). post-update-doctor = backlog stub only (no folder). Hub notes MB-001 in flight; PRs landing mid-review expected — record pins sha, MB-002 catches delta.
 
 ## Interrupted Work
