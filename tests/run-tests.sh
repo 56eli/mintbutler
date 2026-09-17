@@ -1808,6 +1808,377 @@ else
   fail "verify-failure left a state dir behind"
 fi
 
+# ---------------------------------------------------------------------------
+# Stages (ag)-(al): appimage-installer — fake HOMEs and temp .AppImage
+# fixture files (a few bytes) only; never real HOME state. Entry writing
+# and state recording go through the shared lib/desktop-entry.sh, so the
+# assertions mirror that library's layout.
+# ---------------------------------------------------------------------------
+
+AI_MODULE="${REPO_ROOT}/modules/appimage-installer/module.sh"
+AI_FIXTURES="${TMPBASE}/ai-fixtures"
+AI_SYS_EMPTY="${TMPBASE}/ai-sys-empty"
+mkdir -p "${AI_FIXTURES}" "${AI_SYS_EMPTY}"
+printf '#!/bin/sh\necho mintbutler appimage fixture\n' > "${AI_FIXTURES}/My_App-v1.AppImage"
+cp -a "${AI_FIXTURES}/My_App-v1.AppImage" "${AI_FIXTURES}/My_App-v1.orig"
+printf 'just a small text file, not an AppImage\n' > "${AI_FIXTURES}/notes.txt"
+AI_INSTALL_REL=".local/share/mintbutler-appimages"
+AI_APPS_REL=".local/share/applications"
+AI_STATE_REL=".local/state/mintbutler/appimage-installer"
+
+# Stage (ag): gate, scan, --list position, plan/dry-run screens,
+# non-interactive run.
+printf 'Stage ag: appimage-installer gate, scan, list, plan, non-interactive\n'
+output_ag_scan=""
+code_ag_scan="0"
+output_ag_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_ag_scan="$?"
+if [[ "${code_ag_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with appimage-installer present (got ${code_ag_scan})"
+else
+  pass "butler --scan exits 0 with appimage-installer present"
+fi
+if printf '%s\n' "${output_ag_scan}" | grep -q "PASS appimage-installer"; then
+  pass "butler --scan reports PASS appimage-installer"
+else
+  fail "butler --scan reports PASS appimage-installer"
+fi
+
+output_ag_lint=""
+code_ag_lint="0"
+output_ag_lint="$(cd "${REPO_ROOT}" && bin/modulelint 2>&1)" || code_ag_lint="$?"
+if [[ "${code_ag_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 with appimage-installer present (got ${code_ag_lint})"
+else
+  pass "bin/modulelint exits 0 with appimage-installer present"
+fi
+if printf '%s\n' "${output_ag_lint}" | grep -q "PASS appimage-installer"; then
+  pass "bin/modulelint reports PASS appimage-installer"
+else
+  fail "bin/modulelint reports PASS appimage-installer"
+fi
+
+output_ag_list=""
+code_ag_list="0"
+output_ag_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_ag_list="$?"
+if [[ "${code_ag_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_ag_list})"
+else
+  pass "butler --list exits 0"
+fi
+if [[ "$(printf '%s\n' "${output_ag_list}" | head -n 1)" == "appimage-installer: AppImage installer" ]]; then
+  pass "butler --list shows appimage-installer first (order 10)"
+else
+  fail "butler --list shows appimage-installer first (order 10)"
+fi
+if printf '%s\n' "${output_ag_list}" | grep -q "desktop-shortcut-creator" \
+  && printf '%s\n' "${output_ag_list}" | grep -q "default-apps-editor" \
+  && printf '%s\n' "${output_ag_list}" | grep -q "screenshot-studio"; then
+  pass "butler --list still shows the earlier modules"
+else
+  fail "butler --list still shows the earlier modules"
+fi
+
+AI_AG_HOME="${TMPBASE}/ai-home-ag"
+AI_AG_HOME_BEFORE="${TMPBASE}/ai-home-ag-before"
+mkdir -p "${AI_AG_HOME}"
+cp -a "${AI_AG_HOME}" "${AI_AG_HOME_BEFORE}"
+output_ag_plan=""
+code_ag_plan="0"
+output_ag_plan="$(HOME="${AI_AG_HOME}" bash "${AI_MODULE}" plan < /dev/null 2>&1)" || code_ag_plan="$?"
+ai_ag_plan_lines="$(printf '%s\n' "${output_ag_plan}" | wc -l)"
+if [[ "${code_ag_plan}" -eq 0 && -n "${output_ag_plan}" ]]; then
+  pass "plan exits 0 with output"
+else
+  fail "plan exits 0 with output (got ${code_ag_plan})"
+fi
+if [[ "${ai_ag_plan_lines}" -le 23 ]]; then
+  pass "plan fits the 23-line law (${ai_ag_plan_lines} lines)"
+else
+  fail "plan fits the 23-line law (${ai_ag_plan_lines} lines)"
+fi
+output_ag_dry=""
+code_ag_dry="0"
+output_ag_dry="$(HOME="${AI_AG_HOME}" bash "${AI_MODULE}" dry-run < /dev/null 2>&1)" || code_ag_dry="$?"
+ai_ag_dry_lines="$(printf '%s\n' "${output_ag_dry}" | wc -l)"
+if [[ "${code_ag_dry}" -eq 0 && -n "${output_ag_dry}" ]]; then
+  pass "dry-run exits 0 with output"
+else
+  fail "dry-run exits 0 with output (got ${code_ag_dry})"
+fi
+if [[ "${ai_ag_dry_lines}" -le 23 ]]; then
+  pass "dry-run fits the 23-line law (${ai_ag_dry_lines} lines)"
+else
+  fail "dry-run fits the 23-line law (${ai_ag_dry_lines} lines)"
+fi
+if printf '%s\n' "${output_ag_dry}" | grep -q "mintbutler-appimages" \
+  && printf '%s\n' "${output_ag_dry}" | grep -q "/applications"; then
+  pass "dry-run names the install dir and the applications dir"
+else
+  fail "dry-run names the install dir and the applications dir"
+fi
+if diff -r "${AI_AG_HOME}" "${AI_AG_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "plan and dry-run write nothing to the fake HOME"
+else
+  fail "plan and dry-run modified the fake HOME"
+fi
+
+AI_AG_HOME2="${TMPBASE}/ai-home-ag2"
+AI_AG_HOME2_BEFORE="${TMPBASE}/ai-home-ag2-before"
+mkdir -p "${AI_AG_HOME2}"
+cp -a "${AI_AG_HOME2}" "${AI_AG_HOME2_BEFORE}"
+stderr_ag=""
+code_ag_run="0"
+stderr_ag="$(HOME="${AI_AG_HOME2}" bash "${AI_MODULE}" run < /dev/null 2>&1 >/dev/null)" || code_ag_run="$?"
+if [[ "${code_ag_run}" -eq 1 ]]; then
+  pass "non-interactive run exits 1"
+else
+  fail "non-interactive run exits 1 (got ${code_ag_run})"
+fi
+ai_ag_err_lines="$(printf '%s\n' "${stderr_ag}" | grep -c . || true)"
+if [[ "${ai_ag_err_lines}" == "1" ]] && printf '%s\n' "${stderr_ag}" | grep -qi "interactive"; then
+  pass "non-interactive run prints one plain stderr line"
+else
+  fail "non-interactive run prints one plain stderr line (got ${ai_ag_err_lines} lines)"
+fi
+if diff -r "${AI_AG_HOME2}" "${AI_AG_HOME2_BEFORE}" >/dev/null 2>&1; then
+  pass "non-interactive run writes nothing to the fake HOME"
+else
+  fail "non-interactive run modified the fake HOME"
+fi
+
+# Stage (ah): happy path — path, Enter (accept derived name), y.
+printf 'Stage ah: appimage-installer happy path\n'
+AI_AH_HOME="${TMPBASE}/ai-home-ah"
+mkdir -p "${AI_AH_HOME}"
+AI_AH_INSTALL="${AI_AH_HOME}/${AI_INSTALL_REL}"
+AI_AH_APPS="${AI_AH_HOME}/${AI_APPS_REL}"
+AI_AH_COPY="${AI_AH_INSTALL}/my-app-v1.AppImage"
+AI_AH_ENTRY="${AI_AH_APPS}/my-app-v1.desktop"
+AI_AH_STATE="${AI_AH_HOME}/${AI_STATE_REL}/my-app-v1.paths"
+output_ah=""
+code_ah="0"
+output_ah="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+  MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AH_HOME}" \
+  bash "${AI_MODULE}" run 2>&1)" || code_ah="$?"
+if [[ "${code_ah}" -eq 0 ]]; then
+  pass "happy path run exits 0"
+else
+  fail "happy path run exits 0 (got ${code_ah})"
+fi
+if [[ -f "${AI_AH_COPY}" && -x "${AI_AH_COPY}" ]] \
+  && cmp -s "${AI_AH_COPY}" "${AI_FIXTURES}/My_App-v1.AppImage"; then
+  pass "installed copy exists, is executable, and is byte-equal to the fixture"
+else
+  fail "installed copy exists, is executable, and is byte-equal to the fixture"
+fi
+if [[ -f "${AI_AH_ENTRY}" ]] \
+  && grep -Fq "Exec=${AI_AH_COPY}" "${AI_AH_ENTRY}"; then
+  pass "menu entry exists with Exec pointing at the installed copy"
+else
+  fail "menu entry exists with Exec pointing at the installed copy"
+fi
+if [[ -f "${AI_AH_ENTRY}" ]] && grep -q "^Name=My App v1$" "${AI_AH_ENTRY}"; then
+  pass "menu entry carries the derived default name"
+else
+  fail "menu entry carries the derived default name"
+fi
+if [[ -f "${AI_AH_STATE}" ]] \
+  && grep -Fq "${AI_AH_ENTRY}" "${AI_AH_STATE}" \
+  && grep -Fq "${AI_AH_COPY}" "${AI_AH_STATE}"; then
+  pass "state records both the entry and the installed copy"
+else
+  fail "state records both the entry and the installed copy"
+fi
+if cmp -s "${AI_FIXTURES}/My_App-v1.AppImage" "${AI_FIXTURES}/My_App-v1.orig"; then
+  pass "original fixture file is unchanged"
+else
+  fail "original fixture file was modified"
+fi
+
+# Stage (ai): idempotency — same fixture, same answers, second run.
+printf 'Stage ai: appimage-installer idempotency\n'
+output_ai=""
+code_ai="0"
+output_ai="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+  MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AH_HOME}" \
+  bash "${AI_MODULE}" run 2>&1)" || code_ai="$?"
+if [[ "${code_ai}" -eq 0 ]]; then
+  pass "second run exits 0"
+else
+  fail "second run exits 0 (got ${code_ai})"
+fi
+if printf '%s\n' "${output_ai}" | grep -qi "already"; then
+  pass "second run reports already-done/reuse"
+else
+  fail "second run reports already-done/reuse"
+fi
+if [[ ! -e "${AI_AH_INSTALL}/my-app-v1-2.AppImage" ]]; then
+  pass "no -2 copy is created on the identical re-run"
+else
+  fail "no -2 copy is created on the identical re-run"
+fi
+if [[ ! -e "${AI_AH_APPS}/my-app-v1-2.desktop" ]]; then
+  pass "no second entry is created on the identical re-run"
+else
+  fail "no second entry is created on the identical re-run"
+fi
+
+# Stage (aj): undo after (ah) — entry, copy, and state all removed.
+printf 'Stage aj: appimage-installer undo\n'
+output_aj=""
+code_aj="0"
+output_aj="$(HOME="${AI_AH_HOME}" bash "${AI_MODULE}" undo < /dev/null 2>&1)" || code_aj="$?"
+if [[ "${code_aj}" -eq 0 ]]; then
+  pass "undo exits 0"
+else
+  fail "undo exits 0 (got ${code_aj})"
+fi
+if [[ ! -e "${AI_AH_ENTRY}" ]]; then
+  pass "undo removes the menu entry"
+else
+  fail "undo removes the menu entry"
+fi
+if [[ ! -e "${AI_AH_COPY}" ]]; then
+  pass "undo removes the installed copy"
+else
+  fail "undo removes the installed copy"
+fi
+if [[ ! -d "${AI_AH_HOME}/${AI_STATE_REL}" ]]; then
+  pass "undo removes the state records"
+else
+  fail "undo removes the state records"
+fi
+if cmp -s "${AI_FIXTURES}/My_App-v1.AppImage" "${AI_FIXTURES}/My_App-v1.orig"; then
+  pass "undo leaves the original fixture untouched"
+else
+  fail "undo modified the original fixture"
+fi
+output_aj2=""
+code_aj2="0"
+output_aj2="$(HOME="${AI_AH_HOME}" bash "${AI_MODULE}" undo < /dev/null 2>&1)" || code_aj2="$?"
+if [[ "${code_aj2}" -eq 0 ]] && printf '%s\n' "${output_aj2}" | grep -qi "nothing to undo"; then
+  pass "second undo reports Nothing to undo and exits 0"
+else
+  fail "second undo reports Nothing to undo and exits 0 (got ${code_aj2})"
+fi
+
+# Stage (ak): error paths — nonexistent file and wrong extension.
+printf 'Stage ak: appimage-installer error paths\n'
+AI_AK_HOME="${TMPBASE}/ai-home-ak"
+AI_AK_HOME_BEFORE="${TMPBASE}/ai-home-ak-before"
+mkdir -p "${AI_AK_HOME}"
+cp -a "${AI_AK_HOME}" "${AI_AK_HOME_BEFORE}"
+stderr_ak1=""
+code_ak1="0"
+stderr_ak1="$(printf '/definitely/not/here.AppImage\n' | \
+  MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AK_HOME}" \
+  bash "${AI_MODULE}" run 2>&1 >/dev/null)" || code_ak1="$?"
+if [[ "${code_ak1}" -eq 1 ]]; then
+  pass "nonexistent path exits 1"
+else
+  fail "nonexistent path exits 1 (got ${code_ak1})"
+fi
+if printf '%s\n' "${stderr_ak1}" | grep -qi "no such file"; then
+  pass "nonexistent path prints a plain error"
+else
+  fail "nonexistent path prints a plain error"
+fi
+if diff -r "${AI_AK_HOME}" "${AI_AK_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "nonexistent path writes nothing"
+else
+  fail "nonexistent path modified the fake HOME"
+fi
+stderr_ak2=""
+code_ak2="0"
+stderr_ak2="$(printf '%s\n' "${AI_FIXTURES}/notes.txt" | \
+  MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AK_HOME}" \
+  bash "${AI_MODULE}" run 2>&1 >/dev/null)" || code_ak2="$?"
+if [[ "${code_ak2}" -eq 1 ]]; then
+  pass "wrong extension exits 1"
+else
+  fail "wrong extension exits 1 (got ${code_ak2})"
+fi
+if printf '%s\n' "${stderr_ak2}" | grep -qi "appimage"; then
+  pass "wrong extension prints a plain error"
+else
+  fail "wrong extension prints a plain error"
+fi
+if diff -r "${AI_AK_HOME}" "${AI_AK_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "wrong extension writes nothing"
+else
+  fail "wrong extension modified the fake HOME"
+fi
+
+# Stage (al): copy-name collisions — different bytes version, identical
+# bytes reuse.
+printf 'Stage al: appimage-installer collision versioning and reuse\n'
+AI_AL_HOME="${TMPBASE}/ai-home-al"
+AI_AL_INSTALL="${AI_AL_HOME}/${AI_INSTALL_REL}"
+AI_AL_APPS="${AI_AL_HOME}/${AI_APPS_REL}"
+mkdir -p "${AI_AL_INSTALL}"
+printf 'pre-existing different bytes\n' > "${AI_AL_INSTALL}/my-app-v1.AppImage"
+cp -a "${AI_AL_INSTALL}/my-app-v1.AppImage" "${TMPBASE}/ai-al-seed.ref"
+output_al=""
+code_al="0"
+output_al="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+  MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AL_HOME}" \
+  bash "${AI_MODULE}" run 2>&1)" || code_al="$?"
+if [[ "${code_al}" -eq 0 ]]; then
+  pass "collision run exits 0"
+else
+  fail "collision run exits 0 (got ${code_al})"
+fi
+if [[ -f "${AI_AL_INSTALL}/my-app-v1-2.AppImage" ]] \
+  && cmp -s "${AI_AL_INSTALL}/my-app-v1-2.AppImage" "${AI_FIXTURES}/My_App-v1.AppImage"; then
+  pass "different existing copy shifts the install to a -2 copy"
+else
+  fail "different existing copy shifts the install to a -2 copy"
+fi
+if cmp -s "${AI_AL_INSTALL}/my-app-v1.AppImage" "${TMPBASE}/ai-al-seed.ref"; then
+  pass "pre-existing different copy is left untouched"
+else
+  fail "pre-existing different copy was modified"
+fi
+if [[ -f "${AI_AL_APPS}/my-app-v1.desktop" ]] \
+  && grep -Fq "Exec=${AI_AL_INSTALL}/my-app-v1-2.AppImage" "${AI_AL_APPS}/my-app-v1.desktop"; then
+  pass "entry points at the -2 copy"
+else
+  fail "entry points at the -2 copy"
+fi
+
+AI_AL2_HOME="${TMPBASE}/ai-home-al2"
+AI_AL2_INSTALL="${AI_AL2_HOME}/${AI_INSTALL_REL}"
+AI_AL2_APPS="${AI_AL2_HOME}/${AI_APPS_REL}"
+mkdir -p "${AI_AL2_INSTALL}"
+cp "${AI_FIXTURES}/My_App-v1.AppImage" "${AI_AL2_INSTALL}/my-app-v1.AppImage"
+output_al2=""
+code_al2="0"
+output_al2="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+  MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AL2_HOME}" \
+  bash "${AI_MODULE}" run 2>&1)" || code_al2="$?"
+if [[ "${code_al2}" -eq 0 ]]; then
+  pass "identical-pre-copy run exits 0"
+else
+  fail "identical-pre-copy run exits 0 (got ${code_al2})"
+fi
+if printf '%s\n' "${output_al2}" | grep -qi "reused"; then
+  pass "byte-identical pre-existing copy is reused"
+else
+  fail "byte-identical pre-existing copy is reused"
+fi
+if [[ ! -e "${AI_AL2_INSTALL}/my-app-v1-2.AppImage" ]]; then
+  pass "no -2 copy when the pre-existing copy is byte-identical"
+else
+  fail "no -2 copy when the pre-existing copy is byte-identical"
+fi
+if [[ -x "${AI_AL2_INSTALL}/my-app-v1.AppImage" ]] \
+  && [[ -f "${AI_AL2_APPS}/my-app-v1.desktop" ]] \
+  && grep -Fq "Exec=${AI_AL2_INSTALL}/my-app-v1.AppImage" "${AI_AL2_APPS}/my-app-v1.desktop"; then
+  pass "reused copy is executable and the entry points at it"
+else
+  fail "reused copy is executable and the entry points at it"
+fi
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
