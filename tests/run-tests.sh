@@ -2210,6 +2210,320 @@ else
   fail "reused copy is executable and the entry points at it"
 fi
 
+# ---------------------------------------------------------------------------
+# Stages (am)-(aq): timeshift-guardian (elevated) — stub-only verification.
+# Every stage runs with a controlled PATH (stub timeshift and sudo plus symlinks
+# to the coreutils the module needs). No stage ever invokes real sudo or real
+# timeshift.
+# ---------------------------------------------------------------------------
+
+TG_MODULE="${REPO_ROOT}/modules/timeshift-guardian/module.sh"
+TG_STUB_ROOT="${TMPBASE}/tg-stubs"
+mkdir -p "${TG_STUB_ROOT}"
+
+tg_make_bin() {
+  local dir="${1:-}"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in dirname sed mkdir rm rmdir mv bash date tr grep cut awk; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  printf '%s\n' "${dir}"
+}
+
+# Stage (am): gate pass, scan, list badge, plan/dry-run, missing binary run.
+printf 'Stage am: timeshift-guardian scan, list badge, plan/dry-run, missing preflight\n'
+
+output_am_scan=""
+code_am_scan="0"
+output_am_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_am_scan="$?"
+if [[ "${code_am_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with timeshift-guardian present (got ${code_am_scan})"
+else
+  pass "butler --scan exits 0 with timeshift-guardian present"
+fi
+if printf '%s\n' "${output_am_scan}" | grep -q "PASS timeshift-guardian"; then
+  pass "butler --scan reports PASS timeshift-guardian"
+else
+  fail "butler --scan reports PASS timeshift-guardian"
+fi
+
+output_am_lint=""
+code_am_lint="0"
+output_am_lint="$(cd "${REPO_ROOT}" && bin/modulelint timeshift-guardian 2>&1)" || code_am_lint="$?"
+if [[ "${code_am_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 for timeshift-guardian (got ${code_am_lint})"
+else
+  pass "bin/modulelint exits 0 for timeshift-guardian"
+fi
+if printf '%s\n' "${output_am_lint}" | grep -q "PASS timeshift-guardian"; then
+  pass "bin/modulelint reports PASS timeshift-guardian"
+else
+  fail "bin/modulelint reports PASS timeshift-guardian"
+fi
+
+output_am_list=""
+code_am_list="0"
+output_am_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_am_list="$?"
+if [[ "${code_am_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_am_list})"
+else
+  pass "butler --list exits 0"
+fi
+tg_list_line="$(printf '%s\n' "${output_am_list}" | grep -- "timeshift-guardian: Timeshift guardian" || true)"
+if [[ -n "${tg_list_line}" ]]; then
+  pass "butler --list shows timeshift-guardian: Timeshift guardian"
+else
+  fail "butler --list shows timeshift-guardian: Timeshift guardian"
+fi
+if [[ "${tg_list_line}" == *"⚠ elevated"* ]]; then
+  pass "butler --list shows the elevated badge on timeshift-guardian"
+else
+  fail "butler --list shows the elevated badge on timeshift-guardian"
+fi
+
+output_am_plan=""
+code_am_plan="0"
+output_am_plan="$("${TG_MODULE}" plan 2>&1)" || code_am_plan="$?"
+if [[ "${code_am_plan}" -eq 0 && -n "${output_am_plan}" ]]; then
+  pass "timeshift-guardian plan exits 0 and non-empty"
+else
+  fail "timeshift-guardian plan exits 0 and non-empty (got ${code_am_plan})"
+fi
+plan_lines="$(printf '%s\n' "${output_am_plan}" | grep -c . || true)"
+if [[ "${plan_lines}" -le 23 ]]; then
+  pass "timeshift-guardian plan renders in <= 23 lines (got ${plan_lines})"
+else
+  fail "timeshift-guardian plan renders in <= 23 lines (got ${plan_lines})"
+fi
+if printf '%s\n' "${output_am_plan}" | grep -Fq "timeshift --list" \
+  && printf '%s\n' "${output_am_plan}" | grep -Fq "timeshift --create --comments"; then
+  pass "timeshift-guardian plan contains timeshift --list and timeshift --create --comments"
+else
+  fail "timeshift-guardian plan contains timeshift --list and timeshift --create --comments"
+fi
+
+output_am_dry=""
+code_am_dry="0"
+output_am_dry="$("${TG_MODULE}" dry-run 2>&1)" || code_am_dry="$?"
+if [[ "${code_am_dry}" -eq 0 && -n "${output_am_dry}" ]]; then
+  pass "timeshift-guardian dry-run exits 0 and non-empty"
+else
+  fail "timeshift-guardian dry-run exits 0 and non-empty (got ${code_am_dry})"
+fi
+dry_lines="$(printf '%s\n' "${output_am_dry}" | grep -c . || true)"
+if [[ "${dry_lines}" -le 23 ]]; then
+  pass "timeshift-guardian dry-run renders in <= 23 lines (got ${dry_lines})"
+else
+  fail "timeshift-guardian dry-run renders in <= 23 lines (got ${dry_lines})"
+fi
+
+# Run with stdin /dev/null and no timeshift on PATH -> exit 1, one plain stderr line mentioning Software Manager
+TG_AM_BIN="${TG_STUB_ROOT}/bin-am"
+tg_make_bin "${TG_AM_BIN}" >/dev/null
+AM_LOG="${TMPBASE}/tg-am.log"
+rm -f "${AM_LOG}"
+
+code_am_run="0"
+stderr_am_run=""
+stderr_am_run="$(PATH="${TG_AM_BIN}" bash "${TG_MODULE}" run < /dev/null 2>&1 >/dev/null)" || code_am_run="$?"
+if [[ "${code_am_run}" -eq 1 ]]; then
+  pass "timeshift-guardian missing-tool exits 1"
+else
+  fail "timeshift-guardian missing-tool exits 1 (got ${code_am_run})"
+fi
+am_err_lines="$(printf '%s\n' "${stderr_am_run}" | grep -c . || true)"
+if [[ "${am_err_lines}" -eq 1 ]] && printf '%s\n' "${stderr_am_run}" | grep -qi "Software Manager"; then
+  pass "timeshift-guardian missing-tool prints one plain stderr line mentioning Software Manager"
+else
+  fail "timeshift-guardian missing-tool prints one plain stderr line mentioning Software Manager (got: ${stderr_am_run})"
+fi
+if [[ ! -s "${AM_LOG}" ]]; then
+  pass "timeshift-guardian missing-tool log is absent/empty"
+else
+  fail "timeshift-guardian missing-tool log is absent/empty"
+fi
+
+# Stages (an)–(aq) invoke the module directly (bash modules/timeshift-guardian/module.sh run
+# with the stub PATH and piped stdin) since the menu path cannot script elevated confirmation.
+
+# Stage (an): unconfigured variant
+printf 'Stage an: timeshift-guardian unconfigured guidance\n'
+TG_AN_BIN="${TG_STUB_ROOT}/bin-an"
+tg_make_bin "${TG_AN_BIN}" >/dev/null
+AN_LOG="${TMPBASE}/tg-an.log"
+rm -f "${AN_LOG}"
+
+cat <<'EOF_STUB_AN' > "${TG_AN_BIN}/timeshift"
+#!/usr/bin/env bash
+set -euo pipefail
+echo "timeshift $*" >> "${AN_LOG}"
+if [[ "$*" == *"--list"* ]]; then
+  echo "Device not found"
+  echo "Select a snapshot device in the Timeshift GUI"
+  exit 0
+fi
+EOF_STUB_AN
+chmod +x "${TG_AN_BIN}/timeshift"
+
+cat <<'EOF_SUDO_PASS' > "${TG_AN_BIN}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+"$@"
+EOF_SUDO_PASS
+chmod +x "${TG_AN_BIN}/sudo"
+
+output_an=""
+code_an="0"
+output_an="$(export AN_LOG; PATH="${TG_AN_BIN}" bash "${TG_MODULE}" run < /dev/null 2>&1)" || code_an="$?"
+if [[ "${code_an}" -eq 0 ]]; then
+  pass "timeshift-guardian unconfigured exits 0"
+else
+  fail "timeshift-guardian unconfigured exits 0 (got ${code_an})"
+fi
+if printf '%s\n' "${output_an}" | grep -qi "open the timeshift gui once" \
+  || printf '%s\n' "${output_an}" | grep -qi "not yet configured"; then
+  pass "timeshift-guardian unconfigured displays guidance paragraph"
+else
+  fail "timeshift-guardian unconfigured displays guidance paragraph"
+fi
+if grep -q -- "--list" "${AN_LOG}" && ! grep -q -- "--create" "${AN_LOG}"; then
+  pass "timeshift-guardian unconfigured log contains --list but NO --create"
+else
+  fail "timeshift-guardian unconfigured log contains --list but NO --create"
+fi
+
+# Stage (ao): configured happy path
+printf 'Stage ao: timeshift-guardian configured happy path\n'
+TG_AO_BIN="${TG_STUB_ROOT}/bin-ao"
+tg_make_bin "${TG_AO_BIN}" >/dev/null
+AO_LOG="${TMPBASE}/tg-ao.log"
+rm -f "${AO_LOG}"
+
+cat <<'EOF_STUB_AO' > "${TG_AO_BIN}/timeshift"
+#!/usr/bin/env bash
+set -euo pipefail
+echo "timeshift $*" >> "${AO_LOG}"
+if [[ "$*" == *"--list"* ]]; then
+  echo "Mounted at : /run/timeshift/backup"
+  echo "Device     : /dev/sda1"
+  echo "Mode       : RSYNC"
+  echo "Device is OK"
+  echo "------------------------------------------------------------------------------"
+  echo "Num     Name                 Tags  Description"
+  echo "------------------------------------------------------------------------------"
+  echo "0    >  2026-09-16_12-00-00  O D   Initial"
+  exit 0
+fi
+if [[ "$*" == *"--create"* ]]; then
+  echo "Creating new snapshot..."
+  echo "Done"
+  exit 0
+fi
+EOF_STUB_AO
+chmod +x "${TG_AO_BIN}/timeshift"
+cp "${TG_AN_BIN}/sudo" "${TG_AO_BIN}/sudo"
+
+output_ao=""
+code_ao="0"
+# Scripted stdin = Enter (accept default comment) then y (confirm)
+output_ao="$(export AO_LOG; printf '\ny\n' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ao="$?"
+if [[ "${code_ao}" -eq 0 ]]; then
+  pass "timeshift-guardian configured happy path exits 0"
+else
+  fail "timeshift-guardian configured happy path exits 0 (got ${code_ao})"
+fi
+if grep -q -- "--list" "${AO_LOG}" \
+  && grep -E "timeshift --create --comments 'mintbutler guard" "${AO_LOG}" >/dev/null; then
+  pass "timeshift-guardian happy path log shows --list, --create with default comment, and --list again"
+else
+  fail "timeshift-guardian happy path log shows --list, --create with default comment, and --list again"
+fi
+list_count_ao="$(grep -c -- "--list" "${AO_LOG}" || true)"
+if [[ "${list_count_ao}" -ge 2 ]]; then
+  pass "timeshift-guardian happy path verified snapshot with second --list"
+else
+  fail "timeshift-guardian happy path verified snapshot with second --list"
+fi
+if printf '%s\n' "${output_ao}" | grep -q "sudo timeshift --create --comments"; then
+  pass "timeshift-guardian happy path shows exact elevated command display"
+else
+  fail "timeshift-guardian happy path shows exact elevated command display"
+fi
+if printf '%s\n' "${output_ao}" | grep -qi "snapshots are additive" \
+  && printf '%s\n' "${output_ao}" | grep -qi "never deletes snapshots"; then
+  pass "timeshift-guardian happy path shows additive statement"
+else
+  fail "timeshift-guardian happy path shows additive statement"
+fi
+
+# Stage (ap): confirm-no
+printf 'Stage ap: timeshift-guardian confirm-no\n'
+AP_LOG="${TMPBASE}/tg-ap.log"
+rm -f "${AP_LOG}"
+output_ap=""
+code_ap="0"
+# Scripted stdin = Enter then n
+output_ap="$(export AO_LOG="${AP_LOG}"; printf '\nn\n' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ap="$?"
+if [[ "${code_ap}" -eq 0 ]]; then
+  pass "timeshift-guardian confirm-no exits 0"
+else
+  fail "timeshift-guardian confirm-no exits 0 (got ${code_ap})"
+fi
+if printf '%s\n' "${output_ap}" | grep -qi "Nothing changed"; then
+  pass "timeshift-guardian confirm-no outputs 'Nothing changed.'"
+else
+  fail "timeshift-guardian confirm-no outputs 'Nothing changed.'"
+fi
+if grep -q -- "--list" "${AP_LOG}" && ! grep -q -- "--create" "${AP_LOG}"; then
+  pass "timeshift-guardian confirm-no log contains --list but NO --create"
+else
+  fail "timeshift-guardian confirm-no log contains --list but NO --create"
+fi
+
+# Stage (aq): elevated-failure path
+printf 'Stage aq: timeshift-guardian elevated-failure path\n'
+TG_AQ_BIN="${TG_STUB_ROOT}/bin-aq"
+tg_make_bin "${TG_AQ_BIN}" >/dev/null
+AQ_LOG="${TMPBASE}/tg-aq.log"
+rm -f "${AQ_LOG}"
+
+cp "${TG_AO_BIN}/timeshift" "${TG_AQ_BIN}/timeshift"
+cat <<'EOF_SUDO_FAIL' > "${TG_AQ_BIN}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sudo-stub: refused %s\n' "$*" >&2
+exit 1
+EOF_SUDO_FAIL
+chmod +x "${TG_AQ_BIN}/sudo"
+
+output_aq=""
+stderr_aq=""
+code_aq="0"
+USED_AQ_STDERR="${TMPBASE}/tg-aq.stderr"
+output_aq="$(export AO_LOG="${AQ_LOG}"; printf '\ny\n' | PATH="${TG_AQ_BIN}" bash "${TG_MODULE}" run 2>"${USED_AQ_STDERR}")" || code_aq="$?"
+if [[ "${code_aq}" -ne 0 ]]; then
+  pass "timeshift-guardian elevated-failure exits non-zero (got ${code_aq})"
+else
+  fail "timeshift-guardian elevated-failure exits non-zero"
+fi
+stderr_aq="$(cat "${USED_AQ_STDERR}")"
+aq_module_lines="$(printf '%s\n' "${stderr_aq}" | grep -v '^sudo-stub:' | grep -c . || true)"
+if [[ "${aq_module_lines}" -eq 1 ]]; then
+  pass "timeshift-guardian elevated-failure prints one plain stderr line"
+else
+  fail "timeshift-guardian elevated-failure prints one plain stderr line (got ${aq_module_lines} lines: ${stderr_aq})"
+fi
+if ! grep -q -- "--create" "${AQ_LOG}" 2>/dev/null; then
+  pass "timeshift-guardian elevated-failure log contains NO --create"
+else
+  fail "timeshift-guardian elevated-failure log contains NO --create"
+fi
+
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
