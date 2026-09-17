@@ -19,7 +19,7 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 005 | .orchestrator/prompts/005-android-file-transfer.md | seed module android-file-transfer + lib/elevate.sh (completes v0.1) | — | — | CANCELLED 2026-09-16 — owner withdrew the need; prompt never dispatched (retained, bannered, DO NOT RUN) |
 | 006 | .orchestrator/prompts/006-batch1-convention-docs.md | batch #1 kickoff: menu-ordering convention, docs alignment, backlog stub | arena/01a0acb9-mintbutler (pinned; substitution recorded) | #4 | Merged 2026-09-17 (merge commit 8d0bd3e) |
 | 007 | .orchestrator/prompts/007-screenshot-studio.md | screenshot-studio: flameshot install + Print Screen dconf rebind, recorded-restore undo, lib/elevate.sh debut | arena/01a0accc-mintbutler (pinned; substitution recorded) | #5 | Merged 2026-09-17 (merge commit d576a42) |
-| 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (+ PR #5 distillation/deferred rows) | arena/01a0b02b-mintbutler (pinned; substitution recorded) | #6 | Reviewed 2026-09-17 — MERGE advised, awaiting operator merge |
+| 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (+ PR #5 distillation/deferred rows) | arena/01a0b02b-mintbutler (pinned; substitution recorded) | #6 | Merged 2026-09-17 (merge commit 1255277) |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -40,9 +40,9 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] PR #3: desktop-shortcut-creator v1 (Merged 2026-09-16)
 - [~] 005: android-file-transfer — CANCELLED by owner 2026-09-16 before dispatch
 - [x] 006: batch #1 convention + docs alignment (PR #4 merged 2026-09-17, commit 8d0bd3e)
-- [ ] 008: spec pin + bin/orchestrator-check — PR #6 reviewed 2026-09-17, MERGE advised; awaiting operator merge
+- [x] 008: spec pin + bin/orchestrator-check — PR #6 merged 2026-09-17 (1255277); mechanical compliance gate live
 - [x] 007: screenshot-studio — PR #5 merged 2026-09-17 (d576a42)
-- [ ] 009: default-apps-editor (Pending — build order 2; order 30; xdg-mime, current-vs-new display)
+- [~] 009: default-apps-editor — IN PROGRESS (build order 2; order 30; xdg-mime current-vs-new, byte-for-byte mimeapps.list backup/restore undo); prompt published + dispatched
 - [ ] 010: appimage-installer (Pending — build order 3; order 10; reuses lib/desktop-entry.sh)
 - [ ] 011: timeshift-guardian (Pending — build order 4; elevated, snapshots additive, order 80)
 - [ ] 012: audio-repair (Pending — build order 5; elevated, config-backup undo, diagnose-first, order 910)
@@ -153,3 +153,6 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | dispatch | 008 dispatched (stub first line: mintbutler agent); operator opened PR #6 from pinned branch arena/01a0b02b-mintbutler
 - 2026-09-17 | refresh-main | PR #6 hand-back — main refreshed before two-dot diff
 - 2026-09-17 | verdict | 008 / PR #6 — MERGE advised: 3-stage gate (diff audit; spec sha256+blob-hash verified by orchestrator; harness 114/0 re-run; live orchestrator-check self-run 5/5 PASS incl. 10 grandfathered; deliverables 1:1 vs prompt incl. four byte-exact tracker bullets; stage (z)->(aa) adaptation documented and correct)
+- 2026-09-17 | refresh-main | owner reported PR #6 merged (1255277); main refreshed, net diff = exactly PR #6 content, no surprises; anchor bullet verified live in §2
+- 2026-09-17 | publish | 009-default-apps-editor published (conforming form; stage letters (ab)-(af) derived from harness per hardening)
+- 2026-09-17 | dispatch | 009 handed to operator; stub first line: mintbutler agent
