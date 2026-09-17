@@ -1,0 +1,8 @@
+title: Timeshift guardian
+description: >-
+  Checks whether Timeshift is installed and configured, shows the snapshot count, and creates one commented on-demand snapshot through a single visible confirmed elevated step. Snapshots are additive: this module never deletes them and honestly says undo is not offered.
+risk: elevated
+undo: false
+needs: [timeshift]
+asks: 2
+order: 80
