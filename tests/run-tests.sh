@@ -635,6 +635,531 @@ else
   fail "Scan picker page 2 differs from page 1"
 fi
 
+# ---------------------------------------------------------------------------
+# Stages (s)-(y): screenshot-studio (elevated) — stub-only verification.
+# Every stage runs the module with a controlled PATH (stub binaries plus
+# symlinks to the few coreutils the module needs) and a fake HOME under
+# mktemp. No stage ever calls real sudo, real apt-get, or real dconf, and no
+# stage touches the real settings store.
+# ---------------------------------------------------------------------------
+
+SS_MODULE="${REPO_ROOT}/modules/screenshot-studio/module.sh"
+SS_STUB_ROOT="${TMPBASE}/ss-stubs"
+SS_SLOT="/org/cinnamon/keybindings/custom/mintbutler-flameshot"
+SS_BUILTIN="/org/cinnamon/keybindings/screenshot"
+SS_LIST="/org/cinnamon/keybindings/custom-list"
+SS_STATE_REL=".local/state/mintbutler/screenshot-studio/binding.paths"
+
+SS_BASH_BIN="${BASH:-}"
+if [[ -z "${SS_BASH_BIN}" ]]; then
+  SS_BASH_BIN="$(command -v bash)"
+fi
+
+mkdir -p "${SS_STUB_ROOT}"
+
+# Stub: file-backed dconf store (path<TAB>value lines under the stage dir).
+cat <<'SS_DCONF_STUB' > "${SS_STUB_ROOT}/dconf"
+#!/usr/bin/env bash
+set -euo pipefail
+STORE="${DCONF_STUB_STORE:-}"
+if [[ -z "${STORE}" ]]; then
+  printf 'dconf-stub: DCONF_STUB_STORE is not set\n' >&2
+  exit 2
+fi
+
+store_normalize() {
+  local key="${1:-}"
+  while [[ "${key}" == */ ]]; do
+    key="${key%/}"
+  done
+  printf '%s' "${key}"
+}
+
+# Rewrite the store without the entry whose path equals "$1".
+store_without() {
+  local skip="${1:-}"
+  local out="${STORE}.tmp.$$"
+  : > "${out}"
+  local p v
+  if [[ -f "${STORE}" ]]; then
+    while IFS=$'\t' read -r p v || [[ -n "${p}" ]]; do
+      if [[ -z "${p}" || "${p}" == "${skip}" ]]; then
+        continue
+      fi
+      printf '%s\t%s\n' "${p}" "${v}" >> "${out}"
+    done < "${STORE}"
+  fi
+  mv "${out}" "${STORE}"
+}
+
+# Rewrite the store without any entry under "$1" (reset -f).
+store_without_tree() {
+  local prefix="${1:-}"
+  local out="${STORE}.tmp.$$"
+  : > "${out}"
+  local p v
+  if [[ -f "${STORE}" ]]; then
+    while IFS=$'\t' read -r p v || [[ -n "${p}" ]]; do
+      if [[ -z "${p}" ]]; then
+        continue
+      fi
+      if [[ "${p}" == "${prefix}" || "${p}" == "${prefix}/"* ]]; then
+        continue
+      fi
+      printf '%s\t%s\n' "${p}" "${v}" >> "${out}"
+    done < "${STORE}"
+  fi
+  mv "${out}" "${STORE}"
+}
+
+operation="${1:-}"
+case "${operation}" in
+  read)
+    key="$(store_normalize "${2:-}")"
+    if [[ -f "${STORE}" ]]; then
+      while IFS=$'\t' read -r p v || [[ -n "${p}" ]]; do
+        if [[ "${p}" == "${key}" ]]; then
+          printf '%s\n' "${v}"
+          exit 0
+        fi
+      done < "${STORE}"
+    fi
+    exit 0
+    ;;
+  write)
+    key="$(store_normalize "${2:-}")"
+    value="${3:-}"
+    if [[ -z "${key}" ]]; then
+      printf 'dconf-stub: write needs a key\n' >&2
+      exit 2
+    fi
+    store_without "${key}"
+    printf '%s\t%s\n' "${key}" "${value}" >> "${STORE}"
+    exit 0
+    ;;
+  reset)
+    if [[ "${2:-}" == "-f" ]]; then
+      store_without_tree "$(store_normalize "${3:-}")"
+      exit 0
+    fi
+    store_without "$(store_normalize "${2:-}")"
+    exit 0
+    ;;
+  list)
+    if [[ -f "${STORE}" ]]; then
+      while IFS=$'\t' read -r p v || [[ -n "${p}" ]]; do
+        if [[ -n "${p}" ]]; then
+          printf '%s\n' "${p}"
+        fi
+      done < "${STORE}"
+    fi
+    exit 0
+    ;;
+  *)
+    printf 'dconf-stub: unsupported operation: %s\n' "${operation}" >&2
+    exit 2
+    ;;
+esac
+SS_DCONF_STUB
+
+# Stub: flameshot present.
+cat <<'SS_FLAMESHOT_STUB' > "${SS_STUB_ROOT}/flameshot"
+#!/usr/bin/env bash
+set -euo pipefail
+exit 0
+SS_FLAMESHOT_STUB
+
+# Stub: privileged step. One stderr line; fails unless SUDO_STUB_EXIT says 0.
+cat <<'SS_SUDO_STUB' > "${SS_STUB_ROOT}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sudo-stub: refused %s\n' "$*" >&2
+exit "${SUDO_STUB_EXIT:-1}"
+SS_SUDO_STUB
+
+chmod +x "${SS_STUB_ROOT}/dconf" "${SS_STUB_ROOT}/flameshot" "${SS_STUB_ROOT}/sudo"
+
+# Build a controlled PATH directory: symlinks to the coreutils the module
+# needs, then only the stubs a stage wants present.
+ss_make_bin() {
+  local dir="${1:-}"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in dirname sed mkdir rm rmdir mv bash; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  printf '%s\n' "${dir}"
+}
+
+ss_store_get() {
+  local store="${1:-}"
+  local key="${2:-}"
+  awk -F'\t' -v k="${key}" '$1 == k { print $2; exit }' "${store}"
+}
+
+ss_store_contains() {
+  local store="${1:-}"
+  local needle="${2:-}"
+  grep -q -- "${needle}" "${store}"
+}
+
+ss_make_bin "${SS_STUB_ROOT}/bin-rebind" >/dev/null
+cp "${SS_STUB_ROOT}/dconf" "${SS_STUB_ROOT}/flameshot" "${SS_STUB_ROOT}/sudo" "${SS_STUB_ROOT}/bin-rebind/"
+
+ss_make_bin "${SS_STUB_ROOT}/bin-install-fail" >/dev/null
+cp "${SS_STUB_ROOT}/sudo" "${SS_STUB_ROOT}/bin-install-fail/"
+
+ss_make_bin "${SS_STUB_ROOT}/bin-no-dconf" >/dev/null
+cp "${SS_STUB_ROOT}/flameshot" "${SS_STUB_ROOT}/bin-no-dconf/"
+
+SS_BIN_REBIND="${SS_STUB_ROOT}/bin-rebind"
+SS_BIN_INSTALL_FAIL="${SS_STUB_ROOT}/bin-install-fail"
+SS_BIN_NO_DCONF="${SS_STUB_ROOT}/bin-no-dconf"
+
+# Stage (s): gate pass, scan, list badge in the real repo.
+printf 'Stage s: screenshot-studio gate, scan, list badge\n'
+output_s_scan=""
+code_s_scan="0"
+output_s_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_s_scan="$?"
+if [[ "${code_s_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with screenshot-studio present (got ${code_s_scan})"
+else
+  pass "butler --scan exits 0 with screenshot-studio present"
+fi
+if printf '%s\n' "${output_s_scan}" | grep -q "PASS screenshot-studio"; then
+  pass "butler --scan reports PASS screenshot-studio"
+else
+  fail "butler --scan reports PASS screenshot-studio"
+fi
+
+output_s_lint=""
+code_s_lint="0"
+output_s_lint="$(cd "${REPO_ROOT}" && bin/modulelint 2>&1)" || code_s_lint="$?"
+if [[ "${code_s_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 over all modules (got ${code_s_lint})"
+else
+  pass "bin/modulelint exits 0 over all modules"
+fi
+if printf '%s\n' "${output_s_lint}" | grep -q "PASS screenshot-studio"; then
+  pass "bin/modulelint reports PASS screenshot-studio"
+else
+  fail "bin/modulelint reports PASS screenshot-studio"
+fi
+
+output_s_list=""
+code_s_list="0"
+output_s_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_s_list="$?"
+if [[ "${code_s_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_s_list})"
+else
+  pass "butler --list exits 0"
+fi
+ss_list_line="$(printf '%s\n' "${output_s_list}" | grep -- "screenshot-studio: Screenshot studio" || true)"
+if [[ -n "${ss_list_line}" ]]; then
+  pass "butler --list shows screenshot-studio: Screenshot studio"
+else
+  fail "butler --list shows screenshot-studio: Screenshot studio"
+fi
+if [[ "${ss_list_line}" == *"⚠ elevated"* ]]; then
+  pass "butler --list shows the elevated badge on screenshot-studio"
+else
+  fail "butler --list shows the elevated badge on screenshot-studio"
+fi
+if printf '%s\n' "${output_s_list}" | grep -q "desktop-shortcut-creator"; then
+  pass "butler --list still shows desktop-shortcut-creator"
+else
+  fail "butler --list still shows desktop-shortcut-creator"
+fi
+
+# Stage (t): rebind path against the stub store.
+printf 'Stage t: screenshot-studio rebind\n'
+SS_T_HOME="${TMPBASE}/ss-home-t"
+SS_T_STORE="${TMPBASE}/ss-store-t.txt"
+mkdir -p "${SS_T_HOME}"
+printf '%s\t%s\n' "${SS_BUILTIN}" "['Print']" > "${SS_T_STORE}"
+cp "${SS_T_STORE}" "${SS_T_STORE}.seeded"
+output_t=""
+code_t="0"
+output_t="$(PATH="${SS_BIN_REBIND}" HOME="${SS_T_HOME}" DCONF_STUB_STORE="${SS_T_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null 2>&1)" || code_t="$?"
+if [[ "${code_t}" -ne 0 ]]; then
+  fail "rebind run exits 0 (got ${code_t})"
+else
+  pass "rebind run exits 0"
+fi
+ss_t_command="$(ss_store_get "${SS_T_STORE}" "${SS_SLOT}/command")"
+ss_t_binding="$(ss_store_get "${SS_T_STORE}" "${SS_SLOT}/binding")"
+ss_t_name="$(ss_store_get "${SS_T_STORE}" "${SS_SLOT}/name")"
+ss_t_list="$(ss_store_get "${SS_T_STORE}" "${SS_LIST}")"
+ss_t_builtin="$(ss_store_get "${SS_T_STORE}" "${SS_BUILTIN}")"
+if [[ "${ss_t_command}" == *flameshot* ]]; then
+  pass "stub store: slot command points at flameshot (${ss_t_command})"
+else
+  fail "stub store: slot command points at flameshot (got '${ss_t_command}')"
+fi
+if [[ "${ss_t_binding}" == *Print* ]]; then
+  pass "stub store: slot binding holds Print (${ss_t_binding})"
+else
+  fail "stub store: slot binding holds Print (got '${ss_t_binding}')"
+fi
+if [[ "${ss_t_name}" == *"Flameshot (mintbutler)"* ]]; then
+  pass "stub store: slot name recorded"
+else
+  fail "stub store: slot name recorded (got '${ss_t_name}')"
+fi
+if [[ "${ss_t_list}" == *"${SS_SLOT}"* ]]; then
+  pass "stub store: custom-list contains the slot path"
+else
+  fail "stub store: custom-list contains the slot path (got '${ss_t_list}')"
+fi
+if [[ "${ss_t_builtin}" == "@as []" ]]; then
+  pass "stub store: built-in screenshot key cleared"
+else
+  fail "stub store: built-in screenshot key cleared (got '${ss_t_builtin}')"
+fi
+SS_T_STATE="${SS_T_HOME}/${SS_STATE_REL}"
+if [[ -f "${SS_T_STATE}" ]] && grep -q "screenshot=\['Print'\]" "${SS_T_STATE}" && grep -q "custom_list=UNSET" "${SS_T_STATE}"; then
+  pass "state file records the previous values"
+else
+  fail "state file records the previous values"
+fi
+if printf '%s\n' "${output_t}" | grep -q "package installs don't cleanly undo"; then
+  pass "rebind output states the mixed undo story"
+else
+  fail "rebind output states the mixed undo story"
+fi
+if printf '%s\n' "${output_t}" | grep -q -- "\[u\]ndo"; then
+  pass "rebind output points at undo for the key binding"
+else
+  fail "rebind output points at undo for the key binding"
+fi
+
+# Stage (u): undo restores the recorded binding.
+printf 'Stage u: screenshot-studio undo\n'
+output_u=""
+code_u="0"
+output_u="$(PATH="${SS_BIN_REBIND}" HOME="${SS_T_HOME}" DCONF_STUB_STORE="${SS_T_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" undo < /dev/null 2>&1)" || code_u="$?"
+if [[ "${code_u}" -ne 0 ]]; then
+  fail "undo exits 0 (got ${code_u})"
+else
+  pass "undo exits 0"
+fi
+ss_u_builtin="$(ss_store_get "${SS_T_STORE}" "${SS_BUILTIN}")"
+if [[ "${ss_u_builtin}" == "['Print']" ]]; then
+  pass "undo restores the built-in binding to ['Print']"
+else
+  fail "undo restores the built-in binding to ['Print'] (got '${ss_u_builtin}')"
+fi
+if ss_store_contains "${SS_T_STORE}" "${SS_SLOT}"; then
+  fail "undo removes the slot from the stub store"
+else
+  pass "undo removes the slot from the stub store"
+fi
+ss_u_list="$(ss_store_get "${SS_T_STORE}" "${SS_LIST}")"
+if [[ "${ss_u_list}" != *"${SS_SLOT}"* ]]; then
+  pass "undo removes the slot from custom-list"
+else
+  fail "undo removes the slot from custom-list (got '${ss_u_list}')"
+fi
+if [[ ! -f "${SS_T_STATE}" ]]; then
+  pass "undo deletes the state file"
+else
+  fail "undo deletes the state file"
+fi
+if printf '%s\n' "${output_u}" | grep -qi "flameshot stays installed"; then
+  pass "undo output says flameshot remains installed"
+else
+  fail "undo output says flameshot remains installed"
+fi
+output_u2=""
+code_u2="0"
+output_u2="$(PATH="${SS_BIN_REBIND}" HOME="${SS_T_HOME}" DCONF_STUB_STORE="${SS_T_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" undo < /dev/null 2>&1)" || code_u2="$?"
+if [[ "${code_u2}" -eq 0 ]] && printf '%s\n' "${output_u2}" | grep -qi "nothing to undo"; then
+  pass "second undo reports Nothing to undo and exits 0"
+else
+  fail "second undo reports Nothing to undo and exits 0 (got ${code_u2})"
+fi
+
+# Stage (v): missing flameshot + failing privileged step.
+printf 'Stage v: screenshot-studio install failure\n'
+SS_V_HOME="${TMPBASE}/ss-home-v"
+SS_V_STORE="${TMPBASE}/ss-store-v.txt"
+mkdir -p "${SS_V_HOME}"
+printf '%s\t%s\n' "${SS_BUILTIN}" "['Print']" > "${SS_V_STORE}"
+cp "${SS_V_STORE}" "${SS_V_STORE}.seeded"
+USED_V_STDERR="${TMPBASE}/ss-v.stderr"
+output_v=""
+code_v="0"
+output_v="$(PATH="${SS_BIN_INSTALL_FAIL}" HOME="${SS_V_HOME}" DCONF_STUB_STORE="${SS_V_STORE}" SUDO_STUB_EXIT=1 \
+  "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null 2>"${USED_V_STDERR}")" || code_v="$?"
+if [[ "${code_v}" -eq 1 ]]; then
+  pass "install failure exits 1"
+else
+  fail "install failure exits 1 (got ${code_v})"
+fi
+ss_v_stderr="$(cat "${USED_V_STDERR}")"
+ss_v_module_lines="$(printf '%s\n' "${ss_v_stderr}" | grep -v '^sudo-stub:' | grep -c . || true)"
+if [[ "${ss_v_module_lines}" == "1" ]] && printf '%s\n' "${ss_v_stderr}" | grep -qi "install"; then
+  pass "install failure prints one plain stderr line mentioning the install"
+else
+  fail "install failure prints one plain stderr line mentioning the install (got ${ss_v_module_lines} lines)"
+fi
+if printf '%s\n' "${output_v}" | grep -q -- "sudo apt-get install -y flameshot"; then
+  pass "install failure shows the exact elevated command on stdout"
+else
+  fail "install failure shows the exact elevated command on stdout"
+fi
+if cmp -s "${SS_V_STORE}" "${SS_V_STORE}.seeded"; then
+  pass "install failure leaves the stub store byte-identical"
+else
+  fail "install failure leaves the stub store byte-identical"
+fi
+if [[ ! -e "${SS_V_HOME}/${SS_STATE_REL}" ]]; then
+  pass "install failure records no state"
+else
+  fail "install failure records no state"
+fi
+
+# Stage (w): idempotency.
+printf 'Stage w: screenshot-studio idempotency\n'
+SS_W_HOME="${TMPBASE}/ss-home-w"
+SS_W_STORE="${TMPBASE}/ss-store-w.txt"
+mkdir -p "${SS_W_HOME}"
+printf '%s\t%s\n' "${SS_BUILTIN}" "['Print']" > "${SS_W_STORE}"
+output_w1=""
+code_w1="0"
+output_w1="$(PATH="${SS_BIN_REBIND}" HOME="${SS_W_HOME}" DCONF_STUB_STORE="${SS_W_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null 2>&1)" || code_w1="$?"
+if [[ "${code_w1}" -eq 0 ]]; then
+  pass "first idempotency run exits 0"
+else
+  fail "first idempotency run exits 0 (got ${code_w1})"
+fi
+cp "${SS_W_STORE}" "${SS_W_STORE}.after-first"
+SS_W_STATE="${SS_W_HOME}/${SS_STATE_REL}"
+cp "${SS_W_STATE}" "${SS_W_STATE}.after-first"
+output_w2=""
+code_w2="0"
+output_w2="$(PATH="${SS_BIN_REBIND}" HOME="${SS_W_HOME}" DCONF_STUB_STORE="${SS_W_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null 2>&1)" || code_w2="$?"
+if [[ "${code_w2}" -eq 0 ]]; then
+  pass "second idempotency run exits 0"
+else
+  fail "second idempotency run exits 0 (got ${code_w2})"
+fi
+if printf '%s\n' "${output_w2}" | grep -qi "already configured"; then
+  pass "second run reports already-configured"
+else
+  fail "second run reports already-configured"
+fi
+if cmp -s "${SS_W_STORE}" "${SS_W_STORE}.after-first"; then
+  pass "second run leaves the stub store byte-identical"
+else
+  fail "second run leaves the stub store byte-identical"
+fi
+if cmp -s "${SS_W_STATE}" "${SS_W_STATE}.after-first"; then
+  pass "second run leaves the state file byte-identical"
+else
+  fail "second run leaves the state file byte-identical"
+fi
+
+# Stage (x): dconf absent.
+printf 'Stage x: screenshot-studio without dconf\n'
+SS_X_HOME="${TMPBASE}/ss-home-x"
+mkdir -p "${SS_X_HOME}"
+USED_X_STDERR="${TMPBASE}/ss-x.stderr"
+code_x="0"
+PATH="${SS_BIN_NO_DCONF}" HOME="${SS_X_HOME}" "${SS_BASH_BIN}" "${SS_MODULE}" run < /dev/null \
+  >"${TMPBASE}/ss-x.stdout" 2>"${USED_X_STDERR}" || code_x="$?"
+if [[ "${code_x}" -eq 1 ]]; then
+  pass "missing dconf exits 1"
+else
+  fail "missing dconf exits 1 (got ${code_x})"
+fi
+if grep -q "dconf not available; keybinding changes need the Cinnamon session tools" "${USED_X_STDERR}"; then
+  pass "missing dconf prints the plain dconf-missing line"
+else
+  fail "missing dconf prints the plain dconf-missing line"
+fi
+if [[ ! -e "${SS_X_HOME}/${SS_STATE_REL}" ]]; then
+  pass "missing dconf records nothing"
+else
+  fail "missing dconf records nothing"
+fi
+
+# Stage (y): plan and dry-run screens.
+printf 'Stage y: screenshot-studio plan and dry-run\n'
+output_y_plan=""
+code_y_plan="0"
+output_y_plan="$(PATH="${SS_BIN_NO_DCONF}" "${SS_BASH_BIN}" "${SS_MODULE}" plan < /dev/null 2>&1)" || code_y_plan="$?"
+ss_y_plan_lines="$(printf '%s\n' "${output_y_plan}" | wc -l)"
+if [[ "${code_y_plan}" -eq 0 && -n "${output_y_plan}" ]]; then
+  pass "plan exits 0 with output"
+else
+  fail "plan exits 0 with output (got ${code_y_plan})"
+fi
+if [[ "${ss_y_plan_lines}" -le 23 ]]; then
+  pass "plan fits the 23-line law (${ss_y_plan_lines} lines)"
+else
+  fail "plan fits the 23-line law (${ss_y_plan_lines} lines)"
+fi
+if printf '%s\n' "${output_y_plan}" | grep -q -- "sudo apt-get install -y flameshot"; then
+  pass "plan shows the exact elevated install command"
+else
+  fail "plan shows the exact elevated install command"
+fi
+if printf '%s\n' "${output_y_plan}" | grep -q -- "/org/cinnamon/keybindings/"; then
+  pass "plan names the dconf paths it will touch"
+else
+  fail "plan names the dconf paths it will touch"
+fi
+
+SS_Y_HOME="${TMPBASE}/ss-home-y"
+SS_Y_STORE="${TMPBASE}/ss-store-y.txt"
+mkdir -p "${SS_Y_HOME}"
+printf '%s\t%s\n' "${SS_BUILTIN}" "['Print']" > "${SS_Y_STORE}"
+cp "${SS_Y_STORE}" "${SS_Y_STORE}.seeded"
+output_y_dry=""
+code_y_dry="0"
+output_y_dry="$(PATH="${SS_BIN_REBIND}" HOME="${SS_Y_HOME}" DCONF_STUB_STORE="${SS_Y_STORE}" \
+  "${SS_BASH_BIN}" "${SS_MODULE}" dry-run < /dev/null 2>&1)" || code_y_dry="$?"
+ss_y_dry_lines="$(printf '%s\n' "${output_y_dry}" | wc -l)"
+if [[ "${code_y_dry}" -eq 0 && -n "${output_y_dry}" ]]; then
+  pass "dry-run exits 0 with output"
+else
+  fail "dry-run exits 0 with output (got ${code_y_dry})"
+fi
+if [[ "${ss_y_dry_lines}" -le 23 ]]; then
+  pass "dry-run fits the 23-line law (${ss_y_dry_lines} lines)"
+else
+  fail "dry-run fits the 23-line law (${ss_y_dry_lines} lines)"
+fi
+if printf '%s\n' "${output_y_dry}" | grep -q -- "sudo apt-get install -y flameshot"; then
+  pass "dry-run shows the exact elevated install command"
+else
+  fail "dry-run shows the exact elevated install command"
+fi
+if printf '%s\n' "${output_y_dry}" | grep -q -- "${SS_SLOT}"; then
+  pass "dry-run shows the custom slot path"
+else
+  fail "dry-run shows the custom slot path"
+fi
+if cmp -s "${SS_Y_STORE}" "${SS_Y_STORE}.seeded"; then
+  pass "dry-run leaves the stub store byte-identical"
+else
+  fail "dry-run leaves the stub store byte-identical"
+fi
+if [[ ! -e "${SS_Y_HOME}/${SS_STATE_REL}" ]]; then
+  pass "dry-run records no state"
+else
+  fail "dry-run records no state"
+fi
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
