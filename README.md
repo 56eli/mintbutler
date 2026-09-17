@@ -72,15 +72,19 @@ manifest fields, actions, output conventions, validation — lives in
 [docs/MODULE_SPEC.md](docs/MODULE_SPEC.md). The owner vision this all serves
 is [docs/VISION.md](docs/VISION.md).
 
-Seed modules (first dispatches):
+Modules shipped and planned:
 
-- **Desktop shortcut creator** — writes a validated `.desktop` entry, sets
-  the executable bit and the trusted flag the right way (user session, not
-  sudo), refreshes caches, optionally places a copy on `~/Desktop`. Undo =
-  delete the files it wrote.
-- **Android file transfer** — sets up and launches MTP file access for
-  Android phones via the Mint-standard stack, installing the needed package
-  as a visible, confirmed, elevated step. Undo: not applicable (declared).
+- **Desktop shortcut creator** (shipped, v0.1) — validated `.desktop`
+  entries the right way (user session, no sudo): scan & place installed
+  apps or build custom app/folder/URL launchers, trusted desktop copies,
+  undo = delete exactly the files it wrote. See
+  `modules/desktop-shortcut-creator/`.
+- **Module batch #1** (owner-approved 2026-09-16): appimage-installer,
+  default-apps-editor, multimedia-codecs, screenshot-studio,
+  printer-helper, system-report-pack, timeshift-guardian (features) and
+  book-access-doctor, audio-repair (fixes) — one reviewed PR per module.
+  The Android file transfer seed was cancelled by the owner before
+  implementation.
 
 ## Running
 
@@ -114,8 +118,9 @@ an orchestrator or builder session booting here:
 
 ## Roadmap
 
-- v0.1 — menu script + module discovery + `modulelint` + the two seed
-  modules.
+- v0.1 — menu script + module discovery + `modulelint` + desktop-shortcut-
+  creator (the android-file-transfer seed was cancelled by owner) —
+  complete.
 - v0.2 — categories/sections in the menu, search filter, favorites.
 - v0.3+ — the backlog *is the owner's life*: each new chore he hits becomes
   exactly one reviewed module.
