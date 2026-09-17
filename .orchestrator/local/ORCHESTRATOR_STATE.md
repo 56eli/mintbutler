@@ -22,6 +22,8 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (+ PR #5 distillation/deferred rows) | arena/01a0b02b-mintbutler (pinned; substitution recorded) | #6 | Merged 2026-09-17 (merge commit 1255277) |
 | 009 | .orchestrator/prompts/009-default-apps-editor.md | default-apps-editor: xdg-mime defaults with current-vs-new display, byte-for-byte mimeapps.list backup/restore undo | arena/01a0b065-mintbutler (pinned; substitution recorded) | #7 | Merged 2026-09-17 (merge commit 9674a43) |
 | 010 | .orchestrator/prompts/010-appimage-installer.md | appimage-installer: user-level AppImage install reusing lib/desktop-entry.sh, copy-never-move, undo removes entry+copy | arena/01a0b0c2-mintbutler + arena/01a0b14e-mintbutler (duplicate dispatch — see 2026-09-17 process note) | #8 (+#9 follow-up) | MERGED BEFORE REVIEW 2026-09-17 (d046064, b930e0b) — health+content branch run post-hoc: FULLY GREEN, no defects, no follow-up |
+| 011 | .orchestrator/prompts/011-timeshift-guardian.md | timeshift-guardian: diagnose-first Timeshift guardian, one confirmed additive snapshot, elevated, no undo (additive policy) | arena/01a0b18d-mintbutler (pinned; substitution recorded) | #10 | Reviewed 2026-09-17 — REVISE issued (revision prompt 012: two hardcoded sudo display strings in plan/dry-run vs §4 fact 7) |
+| 012 | .orchestrator/prompts/012-revise-timeshift-guardian-sudo-display.md | REVISION of PR #10: helper-driven elevated-command display, no sudo literals in module.sh | arena/01a0b18d-mintbutler (continued) | #10 | Published + dispatched 2026-09-17 |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -46,12 +48,12 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] 007: screenshot-studio — PR #5 merged 2026-09-17 (d576a42)
 - [x] 009: default-apps-editor — PR #7 merged 2026-09-17 (9674a43)
 - [x] 010: appimage-installer — PR #8 (+#9) merged 2026-09-17 (d046064, b930e0b) before review; post-hoc gate 199/0 + deliverables 1:1
-- [~] 011: timeshift-guardian — IN PROGRESS (build order 4; elevated, snapshots additive, order 80); prompt published + dispatched
-- [ ] 012: audio-repair (Pending — build order 5; elevated, config-backup undo, diagnose-first, order 910)
-- [ ] 013: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
-- [ ] 014: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
-- [ ] 015: system-report-pack (Pending — build order 8; order 70; additive report file, never installs inxi — plain-tool fallback)
-- [ ] 016: book-access-doctor (Pending — build order 9 (last); order 900; targeted grants only, never chmod -R 777; fstab PRINT-only ruling)
+- [ ] 011: timeshift-guardian — PR #10 reviewed 2026-09-17: REVISE issued (revision prompt 012 dispatched on same branch)
+- [ ] 013: audio-repair (Pending — build order 5; elevated, config-backup undo, diagnose-first, order 910)
+- [ ] 014: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
+- [ ] 015: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
+- [ ] 016: system-report-pack (Pending — build order 8; order 70; additive report file, never installs inxi — plain-tool fallback)
+- [ ] 017: book-access-doctor (Pending — build order 9 (last); order 900; targeted grants only, never chmod -R 777; fstab PRINT-only ruling)
 
 ## Batch #1 Master Data (owner-approved 2026-09-16)
 - Convention: FEATURES order 10/20/30… first; FIXES 900/910… after all features; unique numbers, no ties. Final table: 10 appimage-installer, 20 desktop-shortcut-creator, 30 default-apps-editor, 40 multimedia-codecs, 50 screenshot-studio, 60 printer-helper, 70 system-report-pack, 80 timeshift-guardian, 900 book-access-doctor, 910 audio-repair.
@@ -126,6 +128,8 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 | 2026-09-17 | orch | Environment | Platform worktree rewind reverted uncommitted verdict-state edits between tool calls; verdict block compared against HEAD (rewound too) instead of the pin, so the backup branch never fired | verdict state edits lost once; re-applied manually from record | Hardened | state edits are now backed up to .orchestrator/local/recovery/ immediately after editing, before any publish block; compare pending edits against the PIN, never HEAD |
 | 2026-09-17 | 009 | Environment | Branch-substitution rule used (6th time): pinned branch `arena/01a0b065-mintbutler` | none — rule worked | Scoped | — |
 | 2026-09-17 | 010 | Environment | Duplicate dispatch: task 010 ran in two agent sessions (PR #8 full delivery, PR #9 refinements) and both merged before orchestrator review; a third dispatch correctly reported 'already merged' instead of redoing work | no defects — post-hoc health+content gate fully green; process lesson only | Hardened | operator confirms no task is in flight before pasting a stub (the 'PR open?' question is that checkpoint); orchestrator ran the merged-before-reviewed branch per spec |
+| 2026-09-17 | 011-review | Prompt | Elevated-module prompt left the placeholder-comment display pattern implicit; agent hardcoded 'sudo timeshift --create …' in plan/dry-run (2 lines) instead of elevate_command_line, violating prompt §4 fact 7 | REVISE issued (revision 012); no functional defect — run() was correct | Hardened | elevated-module prompts now show the exact placeholder pattern: elevate_command_line "<cmd> '<placeholder>'" wherever a variable-argument command must be displayed |
+| 2026-09-17 | 011 | Environment | Branch-substitution rule used (7th time): pinned branch `arena/01a0b18d-mintbutler` | none — rule worked | Scoped | — |
 
 ## Run Log
 - 2026-09-16 | publish | 001-butler-core-discovery published on orchestrator branch (pre-adoption)
@@ -170,3 +174,8 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | verdict | 010 / PR #8+#9 (merged-before-reviewed branch): health battery at b930e0b — suite 199/0, modulelint 4/4, scan/list/dry-run clean, bash -n clean, frozen surfaces untouched; content — deliverables 1:1 vs prompt 010 §6 (byte-exact manifest + tracker §4; stages ag-al; PR #9 refinements align INSTALL_DIR with the prompt and extend validate/trust to the already-done path). VERDICT: green, no defects, no follow-up
 - 2026-09-17 | publish | 011-timeshift-guardian published (conforming form)
 - 2026-09-17 | dispatch | 011 handed to operator; stub first line: mintbutler agent
+- 2026-09-17 | dispatch | operator opened PR #10 for 011 from pinned branch arena/01a0b18d-mintbutler
+- 2026-09-17 | refresh-main | PR #10 hand-back — main refreshed before two-dot diff
+- 2026-09-17 | verdict | 011 / PR #10 — REVISE: 3-stage gate (harness 228/0 re-run; modulelint 5/5; scan/list/dry-run 15 lines; bash -n; tracker §4 byte-exact; stages am-aq; mode 755; no undo action — all conforming EXCEPT two hardcoded sudo display strings in plan/dry-run vs §4 fact 7, and unquoted placeholder differs from the actually-run command shape)
+- 2026-09-17 | publish | 012-revise-timeshift-guardian-sudo-display published (revision structure with the three guardrails)
+- 2026-09-17 | dispatch | 012 handed to operator (same branch arena/01a0b18d-mintbutler); stub first line: mintbutler agent
