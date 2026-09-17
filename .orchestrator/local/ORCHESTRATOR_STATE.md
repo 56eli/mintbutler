@@ -20,7 +20,8 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 006 | .orchestrator/prompts/006-batch1-convention-docs.md | batch #1 kickoff: menu-ordering convention, docs alignment, backlog stub | arena/01a0acb9-mintbutler (pinned; substitution recorded) | #4 | Merged 2026-09-17 (merge commit 8d0bd3e) |
 | 007 | .orchestrator/prompts/007-screenshot-studio.md | screenshot-studio: flameshot install + Print Screen dconf rebind, recorded-restore undo, lib/elevate.sh debut | arena/01a0accc-mintbutler (pinned; substitution recorded) | #5 | Merged 2026-09-17 (merge commit d576a42) |
 | 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (+ PR #5 distillation/deferred rows) | arena/01a0b02b-mintbutler (pinned; substitution recorded) | #6 | Merged 2026-09-17 (merge commit 1255277) |
-| 009 | .orchestrator/prompts/009-default-apps-editor.md | default-apps-editor: xdg-mime defaults with current-vs-new display, byte-for-byte mimeapps.list backup/restore undo | arena/01a0b065-mintbutler (pinned; substitution recorded) | #7 | Reviewed 2026-09-17 — MERGE advised, awaiting operator merge |
+| 009 | .orchestrator/prompts/009-default-apps-editor.md | default-apps-editor: xdg-mime defaults with current-vs-new display, byte-for-byte mimeapps.list backup/restore undo | arena/01a0b065-mintbutler (pinned; substitution recorded) | #7 | Merged 2026-09-17 (merge commit 9674a43) |
+| 010 | .orchestrator/prompts/010-appimage-installer.md | appimage-installer: user-level AppImage install reusing lib/desktop-entry.sh, copy-never-move, undo removes entry+copy | — | — | Published + dispatched 2026-09-17 |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -43,8 +44,8 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] 006: batch #1 convention + docs alignment (PR #4 merged 2026-09-17, commit 8d0bd3e)
 - [x] 008: spec pin + bin/orchestrator-check — PR #6 merged 2026-09-17 (1255277); mechanical compliance gate live
 - [x] 007: screenshot-studio — PR #5 merged 2026-09-17 (d576a42)
-- [ ] 009: default-apps-editor — PR #7 reviewed 2026-09-17, MERGE advised; awaiting operator merge
-- [ ] 010: appimage-installer (Pending — build order 3; order 10; reuses lib/desktop-entry.sh)
+- [x] 009: default-apps-editor — PR #7 merged 2026-09-17 (9674a43)
+- [~] 010: appimage-installer — IN PROGRESS (build order 3; order 10; reuses lib/desktop-entry.sh); prompt published + dispatched
 - [ ] 011: timeshift-guardian (Pending — build order 4; elevated, snapshots additive, order 80)
 - [ ] 012: audio-repair (Pending — build order 5; elevated, config-backup undo, diagnose-first, order 910)
 - [ ] 013: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
@@ -161,3 +162,6 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | dispatch | operator opened PR #7 for 009 from pinned branch arena/01a0b065-mintbutler
 - 2026-09-17 | refresh-main | PR #7 hand-back — main refreshed before two-dot diff
 - 2026-09-17 | verdict | 009 / PR #7 — MERGE advised: 3-stage gate (diff audit; harness 150/0 re-run by orchestrator; modulelint 3/3 PASS; scan/list/dry-run 17 lines; bash -n; deliverables 1:1 vs prompt incl. byte-exact manifest, byte-exact tracker §4, stages (ab)-(af))
+- 2026-09-17 | refresh-main | owner reported PR #7 merged (9674a43); main refreshed, net diff = exactly PR #7 content; desktop-entry.sh API re-read for quote-by-copy in 010
+- 2026-09-17 | publish | 010-appimage-installer published (conforming form; stage letters (ag)-(al) derived from harness)
+- 2026-09-17 | dispatch | 010 handed to operator; stub first line: mintbutler agent
