@@ -168,11 +168,10 @@ run() {
   fi
 
   # Menu entry, strictly through the shared desktop-entry pipeline.
-  desktop_check_shadowing "${slug}"
-
   local tmp_desktop=""
   tmp_desktop="$(mktemp)"
-  desktop_build_content Application "${name}" "${copy_path}" "" false "" > "${tmp_desktop}"
+  desktop_build_content "Application" "${name}" "${copy_path}" "" "false" "" > "${tmp_desktop}"
+  desktop_check_shadowing "${slug}"
 
   mkdir -p "${APP_DIR}"
   local resolve_info="" target_file="" status=""
@@ -184,18 +183,21 @@ run() {
     printf 'Already registered: %s (identical entry, kept)\n' "${target_file}"
   else
     cp -- "${tmp_desktop}" "${target_file}"
-    if ! desktop_validate_file "${target_file}"; then
-      rm -f "${tmp_desktop}"
-      printf 'Entry validation failed for %s\n' "${target_file}" >&2
-      return 1
-    fi
-    desktop_trust_and_exec "${target_file}"
     if [[ "${status}" == "versioned" ]]; then
       printf 'Created menu entry %s; existing %s.desktop was kept.\n' "$(basename -- "${target_file}")" "${slug}"
     else
       printf 'Created menu entry: %s\n' "${target_file}"
     fi
   fi
+
+  # Validate and trust the resolved file on both new and already-done paths;
+  # an existing identical entry is still brought through the shared pipeline.
+  if ! desktop_validate_file "${target_file}"; then
+    rm -f "${tmp_desktop}"
+    printf 'Entry validation failed for %s\n' "${target_file}" >&2
+    return 1
+  fi
+  desktop_trust_and_exec "${target_file}"
   rm -f "${tmp_desktop}"
 
   # Undo depends on both records: the entry and the installed copy.
