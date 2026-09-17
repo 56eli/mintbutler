@@ -29,13 +29,14 @@ v0.1 — menu script + module discovery + modulelint + the two seed modules.
 - [~] 005: android-file-transfer — CANCELLED by owner 2026-09-16 before dispatch
 - [x] 006: batch #1 convention + docs alignment (PR #4 merged 2026-09-17, commit 8d0bd3e)
 - [~] 007: screenshot-studio — IN PROGRESS (owner-revised head of build order; prompt published, tip 070d9a1; elevated, flameshot + dconf Print rebind, lib/elevate.sh debut, order 50)
-- [ ] 008: audio-repair (Pending — build order 2; elevated, config-backup undo, diagnose-first, order 910)
-- [ ] 009: appimage-installer (Pending — order 10; reuses lib/desktop-entry.sh)
-- [ ] 010: default-apps-editor (Pending — order 30; xdg-mime, current-vs-new display)
-- [ ] 011: multimedia-codecs (Pending — order 40; elevated install, honest no-undo)
-- [ ] 013: printer-helper (Pending — order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
-- [ ] 014: system-report-pack (Pending — order 70; additive report file, never installs inxi — plain-tool fallback)
-- [ ] 015: book-access-doctor (Pending — build order last; order 900; targeted grants only, never chmod -R 777; fstab PRINT-only ruling)
+- [ ] 008: default-apps-editor (Pending — build order 2; order 30; xdg-mime, current-vs-new display)
+- [ ] 009: appimage-installer (Pending — build order 3; order 10; reuses lib/desktop-entry.sh)
+- [ ] 010: timeshift-guardian (Pending — build order 4; elevated, snapshots additive, order 80)
+- [ ] 011: audio-repair (Pending — build order 5; elevated, config-backup undo, diagnose-first, order 910)
+- [ ] 012: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
+- [ ] 013: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
+- [ ] 014: system-report-pack (Pending — build order 8; order 70; additive report file, never installs inxi — plain-tool fallback)
+- [ ] 015: book-access-doctor (Pending — build order 9 (last); order 900; targeted grants only, never chmod -R 777; fstab PRINT-only ruling)
 
 ## Batch #1 Master Data (owner-approved 2026-09-16)
 - Convention: FEATURES order 10/20/30… first; FIXES 900/910… after all features; unique numbers, no ties. Final table: 10 appimage-installer, 20 desktop-shortcut-creator, 30 default-apps-editor, 40 multimedia-codecs, 50 screenshot-studio, 60 printer-helper, 70 system-report-pack, 80 timeshift-guardian, 900 book-access-doctor, 910 audio-repair.
