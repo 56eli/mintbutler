@@ -1230,6 +1230,189 @@ else
   fail "unset built-in undo leaves the stub store empty"
 fi
 
+# Stage (aa): bin/orchestrator-check fixture matrix (z1–z8).
+# Prompt 008 designates this "stage (z)", but (z) is already used above by
+# screenshot-studio, so the matrix lands here as (aa). Fixtures are
+# throwaway git repos under mktemp -d — never the real repo, never the
+# network, never real credentials.
+printf 'Stage aa: orchestrator-check fixtures\n'
+
+ORCH_CHECK="${REPO_ROOT}/bin/orchestrator-check"
+ZBASE="${TMPBASE}/orch-fixtures"
+mkdir -p "${ZBASE}/nohome"
+Z_CODE="0"
+Z_OUT=""
+
+# z_git DIR ARGS... — git with deterministic identity and isolated config
+# (no system/global gitconfig, no signing hooks leak into fixtures).
+z_git() {
+  local d="${1}"
+  shift
+  (
+    export GIT_AUTHOR_NAME="Fixture" GIT_AUTHOR_EMAIL="fixture@example.invalid"
+    export GIT_COMMITTER_NAME="Fixture" GIT_COMMITTER_EMAIL="fixture@example.invalid"
+    export GIT_AUTHOR_DATE="2026-09-17T00:00:00+00:00" GIT_COMMITTER_DATE="2026-09-17T00:00:00+00:00"
+    export GIT_CONFIG_NOSYSTEM="1" HOME="${ZBASE}/nohome"
+    git -C "${d}" "$@"
+  )
+}
+
+# z_fixture_build DIR — conforming fixture: an epoch commit (dummy spec,
+# tracker anchored to its sha256, pre-adoption prompt 000), then a
+# conforming publish commit (prompt 001 only), a canned origin remote that
+# is never fetched (makes the stub header derive to "mintbutler agent"),
+# and a state file with Run Log + Compliance Epoch sections.
+z_fixture_build() {
+  local fix="${1}"
+  local spec_rel=".orchestrator/ORCHESTRATOR CORE v4.5 — GENERAL PURPOSE.md"
+  mkdir -p "${fix}/.orchestrator/prompts" "${fix}/docs"
+  z_git "${fix}" init -q -b orch
+  z_git "${fix}" remote add origin "https://github.com/example/mintbutler.git"
+  printf 'dummy governing spec bytes (fixture)\n' > "${fix}/${spec_rel}"
+  local fix_sha
+  fix_sha="$(sha256sum -- "${fix}/${spec_rel}" | cut -d' ' -f1)"
+  printf '%s\n' \
+    '# Project State (fixture)' \
+    '' \
+    '## 2. Architectural Invariants' \
+    "- **Governing spec anchor (owner ruling 2026-09-17):** orchestrator governing prompt pinned byte-faithful at \`${spec_rel}\` — sha256 \`${fix_sha}\` — verified by \`bin/orchestrator-check\` (spec-anchor check). Pre-adoption orchestrator drift audited and filed 2026-09-17." \
+    > "${fix}/docs/PROJECT_STATE.md"
+  printf 'baseline pre-adoption prompt\n' > "${fix}/.orchestrator/prompts/000-baseline.md"
+  z_git "${fix}" add -A
+  z_git "${fix}" commit -qm "chore: fixture baseline"
+  local epoch
+  epoch="$(z_git "${fix}" rev-parse HEAD)"
+  cat > "${fix}/.fixture-state.md" <<EOF
+# Fixture Orchestrator State
+
+## Run Log
+- 2026-09-17 | publish | 000-baseline published on orchestrator branch (pre-adoption)
+- 2026-09-17 | dispatch | 000 handed to operator; stub first line: n/a (pre-adoption, prose dispatch)
+- 2026-09-17 | publish | 001-fixture-task published (first conforming publish)
+- 2026-09-17 | dispatch | 001 handed to operator; stub first line: mintbutler agent
+
+## Compliance Epoch
+Epoch: ${epoch}
+Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins
+at the epoch's first child commit; commits at or before the epoch are
+pre-adoption (fixture text).
+EOF
+  printf 'fixture task prompt\n' > "${fix}/.orchestrator/prompts/001-fixture-task.md"
+  z_git "${fix}" add -- .orchestrator/prompts/001-fixture-task.md
+  z_git "${fix}" commit -qm "chore: publish 001-fixture-task"
+}
+
+# z_run DIR — run the tool against fixture DIR; sets Z_CODE and Z_OUT.
+z_run() {
+  Z_CODE="0"
+  Z_OUT="$("${ORCH_CHECK}" --repo-root "${1}" --ref refs/heads/orch --state "${1}/.fixture-state.md" 2>&1)" || Z_CODE="$?"
+}
+
+ZGOOD="${ZBASE}/good"
+z_fixture_build "${ZGOOD}"
+
+# (z1) conforming fixture: exit 0, exactly five PASS lines, no FAIL.
+z_run "${ZGOOD}"
+if [[ "${Z_CODE}" -eq 0 ]] \
+  && [[ "$(printf '%s\n' "${Z_OUT}" | grep -c '^PASS ')" == "5" ]] \
+  && ! printf '%s\n' "${Z_OUT}" | grep -q '^FAIL '; then
+  pass "z1: good fixture exits 0 with five PASS lines"
+else
+  fail "z1: good fixture exits 0 with five PASS lines (code ${Z_CODE})"
+fi
+
+# (z2) dispatch run-log line missing the stub first line field.
+FIX2="${ZBASE}/z2"
+cp -a "${ZGOOD}" "${FIX2}"
+sed -i 's/; stub first line: mintbutler agent//' "${FIX2}/.fixture-state.md"
+z_run "${FIX2}"
+if [[ "${Z_CODE}" -eq 1 ]] && printf '%s\n' "${Z_OUT}" | grep -q '^FAIL stub-first-line'; then
+  pass "z2: dispatch line without stub first line fails stub-first-line"
+else
+  fail "z2: dispatch line without stub first line fails stub-first-line (code ${Z_CODE})"
+fi
+
+# (z3) publish commit also touching README.md.
+FIX3="${ZBASE}/z3"
+cp -a "${ZGOOD}" "${FIX3}"
+printf 'readme\n' > "${FIX3}/README.md"
+printf 'bad touch prompt\n' > "${FIX3}/.orchestrator/prompts/002-bad-touch.md"
+z_git "${FIX3}" add -- README.md .orchestrator/prompts/002-bad-touch.md
+z_git "${FIX3}" commit -qm "chore: publish 002-bad-touch"
+z_run "${FIX3}"
+if [[ "${Z_CODE}" -eq 1 ]] \
+  && printf '%s\n' "${Z_OUT}" | grep '^FAIL publish-form' | grep -qF 'README.md'; then
+  pass "z3: publish commit touching README.md fails publish-form"
+else
+  fail "z3: publish commit touching README.md fails publish-form (code ${Z_CODE})"
+fi
+
+# (z4) prompt commit with a non-publish subject.
+FIX4="${ZBASE}/z4"
+cp -a "${ZGOOD}" "${FIX4}"
+printf 'wip prompt\n' > "${FIX4}/.orchestrator/prompts/003-wip.md"
+z_git "${FIX4}" add -- .orchestrator/prompts/003-wip.md
+z_git "${FIX4}" commit -qm "wip: prompt"
+z_run "${FIX4}"
+if [[ "${Z_CODE}" -eq 1 ]] && printf '%s\n' "${Z_OUT}" | grep -q '^FAIL publish-form'; then
+  pass "z4: prompt commit with wip subject fails publish-form"
+else
+  fail "z4: prompt commit with wip subject fails publish-form (code ${Z_CODE})"
+fi
+
+# (z5) merge commit on the orchestrator branch.
+FIX5="${ZBASE}/z5"
+cp -a "${ZGOOD}" "${FIX5}"
+z_git "${FIX5}" checkout -q -b side
+printf 'side notes\n' > "${FIX5}/NOTES.md"
+z_git "${FIX5}" add -- NOTES.md
+z_git "${FIX5}" commit -qm "chore: side notes"
+z_git "${FIX5}" checkout -q orch
+z_git "${FIX5}" merge -q --no-ff -m "Merge branch 'side'" side
+z_run "${FIX5}"
+if [[ "${Z_CODE}" -eq 1 ]] && printf '%s\n' "${Z_OUT}" | grep -q '^FAIL no-merge-into-orchestrator'; then
+  pass "z5: merge commit on orch fails no-merge-into-orchestrator"
+else
+  fail "z5: merge commit on orch fails no-merge-into-orchestrator (code ${Z_CODE})"
+fi
+
+# (z6) tracker anchor sha no longer matches the spec bytes.
+FIX6="${ZBASE}/z6"
+cp -a "${ZGOOD}" "${FIX6}"
+printf 'tampered\n' >> "${FIX6}/.orchestrator/ORCHESTRATOR CORE v4.5 — GENERAL PURPOSE.md"
+z_run "${FIX6}"
+if [[ "${Z_CODE}" -eq 1 ]] && printf '%s\n' "${Z_OUT}" | grep -q '^FAIL spec-anchor'; then
+  pass "z6: tracker sha differing from spec file fails spec-anchor"
+else
+  fail "z6: tracker sha differing from spec file fails spec-anchor (code ${Z_CODE})"
+fi
+
+# (z7) prompt sequence absent from the Run Log.
+FIX7="${ZBASE}/z7"
+cp -a "${ZGOOD}" "${FIX7}"
+sed -i '/| 001/d' "${FIX7}/.fixture-state.md"
+z_run "${FIX7}"
+if [[ "${Z_CODE}" -eq 1 ]] && printf '%s\n' "${Z_OUT}" | grep -q '^FAIL run-log-coverage'; then
+  pass "z7: prompt seq absent from Run Log fails run-log-coverage"
+else
+  fail "z7: prompt seq absent from Run Log fails run-log-coverage (code ${Z_CODE})"
+fi
+
+# (z8) state file without a Compliance Epoch section.
+FIX8="${ZBASE}/z8"
+cp -a "${ZGOOD}" "${FIX8}"
+sed -i '/^## Compliance Epoch/,$d' "${FIX8}/.fixture-state.md"
+z_run "${FIX8}"
+if [[ "${Z_CODE}" -eq 1 ]] \
+  && printf '%s\n' "${Z_OUT}" | grep -q '^FAIL publish-form' \
+  && printf '%s\n' "${Z_OUT}" | grep -q '^FAIL run-log-coverage'; then
+  pass "z8: missing Compliance Epoch fails publish-form and run-log-coverage"
+else
+  fail "z8: missing Compliance Epoch fails publish-form and run-log-coverage (code ${Z_CODE})"
+fi
+
+rm -rf "${ZBASE}"
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
