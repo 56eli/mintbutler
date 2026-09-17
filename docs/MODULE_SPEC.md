@@ -42,7 +42,7 @@ description: >-                        # 1–3 sentences shown before running
 risk: low                              # low | elevated
 undo: true                             # true | false
 needs: []                              # optional: packages needed beyond a
-                                       # fresh Mint 22 install, e.g. [jmtpfs]
+                                       # fresh Mint 22 install, e.g. [flameshot]
 order: 20                              # optional int; menu sorts by (order, slug);
                                        # omit → sorts after all ordered modules
 asks: 2                                  # optional int; the module's question
