@@ -18,8 +18,8 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 004 | .orchestrator/prompts/004-revise-shortcut-creator-sc2086.md | REVISION of PR #3: shellcheck-clean test-launch word splitting | arena/01a0ac62-mintbutler (continued) | #3 | Completed 2026-09-16 — fix verified, folded into PR #3 verdict |
 | 005 | .orchestrator/prompts/005-android-file-transfer.md | seed module android-file-transfer + lib/elevate.sh (completes v0.1) | — | — | CANCELLED 2026-09-16 — owner withdrew the need; prompt never dispatched (retained, bannered, DO NOT RUN) |
 | 006 | .orchestrator/prompts/006-batch1-convention-docs.md | batch #1 kickoff: menu-ordering convention, docs alignment, backlog stub | arena/01a0acb9-mintbutler (pinned; substitution recorded) | #4 | Merged 2026-09-17 (merge commit 8d0bd3e) |
-| 007 | .orchestrator/prompts/007-screenshot-studio.md | screenshot-studio: flameshot install + Print Screen dconf rebind, recorded-restore undo, lib/elevate.sh debut | — (stub handed to operator 2026-09-17; agent not yet launched) | — | Published 2026-09-17 (tip 070d9a1) — dispatched behind 008 per owner structural-fix ruling |
-| 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests | — | — | Dispatched 2026-09-17 (owner structural-fix ruling) |
+| 007 | .orchestrator/prompts/007-screenshot-studio.md | screenshot-studio: flameshot install + Print Screen dconf rebind, recorded-restore undo, lib/elevate.sh debut | arena/01a0accc-mintbutler (pinned; substitution recorded) | #5 | Reviewed 2026-09-17 — MERGE advised, awaiting operator merge |
+| 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (amended 2026-09-17 pre-dispatch: tracker deliverable now also carries the PR #5 Deferred gate-hardening row) | — | — | Published + amended 2026-09-17 — not yet dispatched |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -40,8 +40,8 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] PR #3: desktop-shortcut-creator v1 (Merged 2026-09-16)
 - [~] 005: android-file-transfer — CANCELLED by owner 2026-09-16 before dispatch
 - [x] 006: batch #1 convention + docs alignment (PR #4 merged 2026-09-17, commit 8d0bd3e)
-- [ ] 008: spec pin + bin/orchestrator-check — DISPATCHED 2026-09-17 (owner structural-fix ruling; ahead of batch work)
-- [~] 007: screenshot-studio — prompt published (tip 070d9a1), stub with operator; dispatch as soon as 008's PR lands (one agent at a time)
+- [ ] 008: spec pin + bin/orchestrator-check — published + amended 2026-09-17; awaiting dispatch (owner ran 007 first)
+- [ ] 007: screenshot-studio — PR #5 reviewed 2026-09-17, MERGE advised; awaiting operator merge
 - [ ] 009: default-apps-editor (Pending — build order 2; order 30; xdg-mime, current-vs-new display)
 - [ ] 010: appimage-installer (Pending — build order 3; order 10; reuses lib/desktop-entry.sh)
 - [ ] 011: timeshift-guardian (Pending — build order 4; elevated, snapshots additive, order 80)
@@ -65,6 +65,7 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - LICENSE file not yet requested.
 - v0.2 features (categories, favorites) deferred until v0.1 is proven on the owner's machine.
 - `desktop_trust_and_exec` swallows gio failures silently (`2>/dev/null || true`); honest advisory output is preferable — candidate for a future small task (noted at PR #3 review, not REVISE-worthy).
+- Gate hardening (Deferred, needs owner decision; from PR #5 review 2026-09-17): shadow sudo/pkexec on PATH during modulelint sandbox runs so NOPASSWD hosts never reach real privileged tools; carried to docs/PROJECT_STATE.md via task 008's tracker deliverable.
 
 ## Scope Boundaries
 - No modules beyond the two seeds until the owner names new chores (backlog = owner's life).
@@ -114,6 +115,8 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 | 2026-09-16 | 003-review | Repository | SC2086 exposure in delivered module (`setsid ${launch_cmd}`) — gate hard-fails where shellcheck exists | REVISE issued (prompt 004); not blocking on owner's shellcheck-less Mint | Hardened | Revision 004 fixed; module prompts now remind agents the gate SC2086-fails unquoted expansions |
 | 2026-09-16 | 006 | Environment | Branch-substitution rule used (3rd time): pinned branch `arena/01a0acb9-mintbutler` | none — rule worked | Scoped | — |
 | 2026-09-17 | orch | Prompt | Session condensation dropped output-format duties (stub first line, publish form); no repo artifact re-anchored them | drift until owner audit; ~1 session of non-conforming publishes | Hardened | Spec materialized in repo (task 008); output contract + run log persisted in this state; bin/orchestrator-check enforces forward |
+| 2026-09-17 | 007-review | Environment | Sandbox has passwordless sudo; modulelint's sandboxed `run` of the elevated module executed real `sudo apt-get install -y flameshot` (package absent; nothing installed) | gate can reach real privileged tools on NOPASSWD hosts; seconds per gate run | Deferred (needs owner decision) | fix candidate: shadow sudo/pkexec in modulelint sandbox runs — dedicated prompt after owner sign-off; carried to tracker via task 008 |
+| 2026-09-17 | 007 | Environment | Branch-substitution rule used (4th time): pinned branch `arena/01a0accc-mintbutler` | none — rule worked | Scoped | — |
 
 ## Run Log
 - 2026-09-16 | publish | 001-butler-core-discovery published on orchestrator branch (pre-adoption)
@@ -136,3 +139,7 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | refresh-main | pre-008 authoring; verified 007's quoted tracker strings byte-match main (quote-by-copy rule)
 - 2026-09-17 | publish | 008-spec-pin-orchestrator-check published (first conforming publish; full guarded form, prompt + state same commit)
 - 2026-09-17 | dispatch | 008 handed to operator ahead of 007 per owner structural-fix ruling; stub first line: mintbutler agent
+- 2026-09-17 | dispatch | 007 ran first instead (operator choice): PR #5 opened from pinned branch arena/01a0accc-mintbutler; stub first line: mintbutler agent
+- 2026-09-17 | refresh-main | PR #5 hand-back — main refreshed before two-dot diff
+- 2026-09-17 | verdict | 007 / PR #5 — MERGE advised: 3-stage gate (diff audit; harness 106/0 re-run by orchestrator under stub sudo; modulelint 2/2 PASS; scan/list/dry-run; bash -n; deliverables 1:1 vs prompt incl. byte-exact tracker edits)
+- 2026-09-17 | publish | 008-spec-pin-orchestrator-check amended in place pre-dispatch (adds PR #5 Deferred gate-hardening row to its tracker deliverable); verdict-time state publish in same commit

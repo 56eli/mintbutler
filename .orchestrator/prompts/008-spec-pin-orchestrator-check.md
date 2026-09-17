@@ -70,13 +70,22 @@ instead of trust-based.
    command):** `.orchestrator/ORCHESTRATOR CORE v4.5 — GENERAL PURPOSE.md`
    The committed blob hash must equal the blob hash of the fetched file
    (`git hash-object` both) — no newline translation, no trailing edits.
-3. **Tracker anchor (exact deliverable).** Append this bullet as the LAST
-   bullet of `## 2. Architectural Invariants` in `docs/PROJECT_STATE.md`,
-   nothing else changed:
+3. **Tracker edits (exact deliverable, two bullets, two sections).** Locate
+   the sections first: `grep -n '^## 2\.\|^## 3\.' docs/PROJECT_STATE.md`
+   (confirm, do not copy). (a) Append this bullet as the LAST bullet of
+   `## 2. Architectural Invariants`:
 
    `- **Governing spec anchor (owner ruling 2026-09-17):** orchestrator governing prompt pinned byte-faithful at `.orchestrator/ORCHESTRATOR CORE v4.5 — GENERAL PURPOSE.md` — sha256 `b71bb681788c23530c21cc46a5ed02194ef873c0ce7abea48e10e14e7096e372` — verified by `bin/orchestrator-check` (spec-anchor check). Pre-adoption orchestrator drift audited and filed 2026-09-17.`
 
    (The backticks above are literal file content.)
+   (b) Append this bullet as the LAST bullet of
+   `## 3. Settled Decisions & Rationale` (carries a Deferred (needs owner
+   decision) hardening item from the PR #5 review, per the spec's Knowledge
+   Bridge rule):
+
+   `- Deferred gate hardening (PR #5 review, 2026-09-17): on hosts with passwordless sudo, bin/modulelint's sandboxed run of an elevated module can reach real sudo (observed there: an apt-get install -y flameshot attempt; package absent; nothing changed). Fix candidate: shadow sudo/pkexec on PATH during sandbox runs — awaiting owner decision. On interactive-sudo Mint with stdin closed, scans fail safe today.`
+
+   Change nothing else in the tracker.
 4. **`bin/orchestrator-check` contract.** Zero-dependency bash
    (`#!/usr/bin/env bash`, `set -euo pipefail`, every expansion quoted),
    executable (git mode 755). Reads only; writes nothing outside an
@@ -207,8 +216,9 @@ Create:
 
 Modify:
 
-3. `docs/PROJECT_STATE.md` — append the exact anchor bullet of §4 fact 3 as
-   the last bullet of §2; nothing else.
+3. `docs/PROJECT_STATE.md` — append the two exact bullets of §4 fact 3
+   (anchor → last bullet of §2; deferred gate hardening → last bullet of
+   §3); nothing else.
 4. `tests/run-tests.sh` — add stage (z) per §4 fact 7; stages (a)–(y)
    untouched and passing.
 
