@@ -1922,6 +1922,37 @@ else
   fail "plan and dry-run modified the fake HOME"
 fi
 
+AI_AG_XDG_DATA="${TMPBASE}/ai-xdg-data"
+mkdir -p "${AI_AG_XDG_DATA}"
+output_ag_xdg=""
+code_ag_xdg="0"
+output_ag_xdg="$(HOME="${AI_AG_HOME}" XDG_DATA_HOME="${AI_AG_XDG_DATA}" bash "${AI_MODULE}" dry-run < /dev/null 2>&1)" || code_ag_xdg="$?"
+if [[ "${code_ag_xdg}" -eq 0 ]] \
+  && printf '%s\n' "${output_ag_xdg}" | grep -Fq "install dir:      ${AI_AG_HOME}/.local/share/mintbutler-appimages" \
+  && printf '%s\n' "${output_ag_xdg}" | grep -Fq "applications dir: ${AI_AG_XDG_DATA}/applications"; then
+  pass "dry-run keeps the managed copy under HOME and follows XDG for applications"
+else
+  fail "dry-run keeps the managed copy under HOME and follows XDG for applications"
+fi
+
+AI_AG_Q_HOME="${TMPBASE}/ai-home-ag-q"
+AI_AG_Q_BEFORE="${TMPBASE}/ai-home-ag-q-before"
+mkdir -p "${AI_AG_Q_HOME}"
+cp -a "${AI_AG_Q_HOME}" "${AI_AG_Q_BEFORE}"
+output_ag_q=""
+code_ag_q="0"
+output_ag_q="$(printf 'q\n' | HOME="${AI_AG_Q_HOME}" bash "${AI_MODULE}" run 2>&1)" || code_ag_q="$?"
+if [[ "${code_ag_q}" -eq 0 ]] && printf '%s\n' "${output_ag_q}" | grep -q "Nothing changed."; then
+  pass "q at the first question aborts cleanly"
+else
+  fail "q at the first question aborts cleanly"
+fi
+if diff -r "${AI_AG_Q_HOME}" "${AI_AG_Q_BEFORE}" >/dev/null 2>&1; then
+  pass "q at the first question writes nothing"
+else
+  fail "q at the first question modified the fake HOME"
+fi
+
 AI_AG_HOME2="${TMPBASE}/ai-home-ag2"
 AI_AG_HOME2_BEFORE="${TMPBASE}/ai-home-ag2-before"
 mkdir -p "${AI_AG_HOME2}"

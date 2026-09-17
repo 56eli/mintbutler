@@ -17,7 +17,10 @@ source "${LIB_DIR}/ask.sh"
 source "${LIB_DIR}/desktop-entry.sh"
 
 MODULE_SLUG="appimage-installer"
-INSTALL_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/mintbutler-appimages"
+# AppImage copies deliberately stay in the fixed managed location from the
+# module contract; the applications directory follows the shared sibling's
+# XDG-aware user-data convention.
+INSTALL_DIR="${HOME}/.local/share/mintbutler-appimages"
 APP_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mintbutler/${MODULE_SLUG}"
 
@@ -165,11 +168,10 @@ run() {
   fi
 
   # Menu entry, strictly through the shared desktop-entry pipeline.
-  desktop_check_shadowing "${slug}"
-
   local tmp_desktop=""
   tmp_desktop="$(mktemp)"
-  desktop_build_content Application "${name}" "${copy_path}" "" false "" > "${tmp_desktop}"
+  desktop_build_content "Application" "${name}" "${copy_path}" "" "false" "" > "${tmp_desktop}"
+  desktop_check_shadowing "${slug}"
 
   mkdir -p "${APP_DIR}"
   local resolve_info="" target_file="" status=""
@@ -181,18 +183,21 @@ run() {
     printf 'Already registered: %s (identical entry, kept)\n' "${target_file}"
   else
     cp -- "${tmp_desktop}" "${target_file}"
-    if ! desktop_validate_file "${target_file}"; then
-      rm -f "${tmp_desktop}"
-      printf 'Entry validation failed for %s\n' "${target_file}" >&2
-      return 1
-    fi
-    desktop_trust_and_exec "${target_file}"
     if [[ "${status}" == "versioned" ]]; then
       printf 'Created menu entry %s; existing %s.desktop was kept.\n' "$(basename -- "${target_file}")" "${slug}"
     else
       printf 'Created menu entry: %s\n' "${target_file}"
     fi
   fi
+
+  # Validate and trust the resolved file on both new and already-done paths;
+  # an existing identical entry is still brought through the shared pipeline.
+  if ! desktop_validate_file "${target_file}"; then
+    rm -f "${tmp_desktop}"
+    printf 'Entry validation failed for %s\n' "${target_file}" >&2
+    return 1
+  fi
+  desktop_trust_and_exec "${target_file}"
   rm -f "${tmp_desktop}"
 
   # Undo depends on both records: the entry and the installed copy.
@@ -206,6 +211,8 @@ run() {
 }
 
 undo() {
+  # The shared helper removes every recorded entry and installed copy, then
+  # cleans the state files; it also owns the "Nothing to undo." behavior.
   desktop_undo "${MODULE_SLUG}"
   printf 'The original downloaded AppImage was never touched; it stays where you saved it.\n'
   return 0
