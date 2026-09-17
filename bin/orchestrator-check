@@ -1,0 +1,448 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# bin/orchestrator-check — mechanical compliance gate for the mintbutler
+# orchestrator. Meta-tool, sibling of bin/modulelint; NOT a user-facing
+# module. Read-only against the repository in default use: it runs git
+# reads and file reads only and writes nothing.
+#
+# Every check fails closed: inconclusive evidence (missing sections,
+# unparseable values, unreachable or shallow ancestry) is a FAIL with the
+# reason stated, never a silent skip.
+
+DEFAULT_REF="refs/remotes/origin/_orch"
+STATE_TRACKED_PATH=".orchestrator/local/ORCHESTRATOR_STATE.md"
+# Allowed path prefixes in a conforming publish commit. See publish-form.
+PUBLISH_ALLOWED_STATE=".orchestrator/local/ORCHESTRATOR_STATE.md"
+
+print_usage() {
+  cat <<'USAGE'
+Usage:
+  bin/orchestrator-check [--repo-root DIR] [--ref REF] [--state FILE]
+  bin/orchestrator-check -h|--help
+
+Mechanically checks the subset of orchestrator compliance that can be
+verified without judgment. Meta-tool (sibling of bin/modulelint); NOT a
+user-facing module. Read-only in default use; writes nothing.
+
+Options:
+  --repo-root DIR  Repository to inspect
+                   (default: git rev-parse --show-toplevel).
+  --ref REF        Orchestrator ref to inspect
+                   (default: refs/remotes/origin/_orch).
+  --state FILE     Orchestrator state file
+                   (default: REPO_ROOT/.orchestrator/local/ORCHESTRATOR_STATE.md
+                   when it exists, else REF:.orchestrator/local/ORCHESTRATOR_STATE.md).
+  -h, --help       Show this help.
+
+Checks (owner compliance item -> check):
+  stub first line                                -> stub-first-line
+  publish commits use the guarded form           -> publish-form
+  prompt-copy sha256 matches the recorded anchor -> spec-anchor
+  every trigger/run entry logged                 -> run-log-coverage
+  orchestrator branch receives no merges         -> no-merge-into-orchestrator
+
+Judgment duties — MERGE/REVISE verdicts, scope and vision decisions, and PR review — remain audit-based and are NOT enforced by this tool; it fails closed on the mechanically checkable subset only.
+
+Output: one line per check — "PASS <name>" or "FAIL <name> — <reason>".
+Exit codes: 0 = all checks pass; 1 = any check failed; 2 = usage error.
+Every check fails closed: inconclusive evidence (missing sections,
+unparseable epoch, shallow or unreachable ancestry) is reported as FAIL
+with the reason stated.
+USAGE
+}
+
+usage_error() {
+  printf 'bin/orchestrator-check: %s\n' "${1}" >&2
+  printf 'Try: bin/orchestrator-check --help\n' >&2
+  exit 2
+}
+
+FAILS=0
+pass_line() {
+  printf 'PASS %s\n' "${1}"
+}
+fail_line() {
+  FAILS=$((FAILS + 1))
+  printf 'FAIL %s — %s\n' "${1}" "${2}"
+}
+
+# --- argument parsing -----------------------------------------------------
+
+OPT_REPO_ROOT=""
+OPT_REF="${DEFAULT_REF}"
+OPT_STATE=""
+
+while [[ "$#" -gt 0 ]]; do
+  case "${1}" in
+    --repo-root)
+      shift
+      [[ "$#" -gt 0 ]] || usage_error "--repo-root requires a DIR"
+      OPT_REPO_ROOT="${1}"
+      ;;
+    --repo-root=*)
+      OPT_REPO_ROOT="${1#--repo-root=}"
+      ;;
+    --ref)
+      shift
+      [[ "$#" -gt 0 ]] || usage_error "--ref requires a REF"
+      OPT_REF="${1}"
+      ;;
+    --ref=*)
+      OPT_REF="${1#--ref=}"
+      ;;
+    --state)
+      shift
+      [[ "$#" -gt 0 ]] || usage_error "--state requires a FILE"
+      OPT_STATE="${1}"
+      ;;
+    --state=*)
+      OPT_STATE="${1#--state=}"
+      ;;
+    -h|--help)
+      print_usage
+      exit 0
+      ;;
+    *)
+      usage_error "unknown option: ${1}"
+      ;;
+  esac
+  shift
+done
+
+# --- repo root + ref resolution ------------------------------------------
+
+if [[ -z "${OPT_REPO_ROOT}" ]]; then
+  OPT_REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" \
+    || usage_error "not inside a git repository; pass --repo-root DIR"
+fi
+[[ -d "${OPT_REPO_ROOT}" ]] || usage_error "repo root is not a directory: ${OPT_REPO_ROOT}"
+git -C "${OPT_REPO_ROOT}" rev-parse --git-dir >/dev/null 2>&1 \
+  || usage_error "not a git repository: ${OPT_REPO_ROOT}"
+REPO_ROOT="${OPT_REPO_ROOT}"
+
+REF_SHA="$(git -C "${REPO_ROOT}" rev-parse --verify --quiet "${OPT_REF}^{commit}" || true)"
+[[ -n "${REF_SHA}" ]] || usage_error "unresolvable ref: ${OPT_REF}"
+
+# --- state file loading ---------------------------------------------------
+
+STATE_TEXT=""
+STATE_AVAILABLE=0
+STATE_REASON="none found"
+
+if [[ -n "${OPT_STATE}" ]]; then
+  [[ -r "${OPT_STATE}" ]] || usage_error "state file not readable: ${OPT_STATE}"
+  STATE_TEXT="$(cat -- "${OPT_STATE}")"
+  STATE_AVAILABLE=1
+elif [[ -r "${REPO_ROOT}/${STATE_TRACKED_PATH}" ]]; then
+  STATE_TEXT="$(cat -- "${REPO_ROOT}/${STATE_TRACKED_PATH}")"
+  STATE_AVAILABLE=1
+else
+  STATE_TEXT="$(git -C "${REPO_ROOT}" show "${REF_SHA}:${STATE_TRACKED_PATH}" 2>/dev/null || true)"
+  if [[ -n "${STATE_TEXT}" ]]; then
+    STATE_AVAILABLE=1
+  else
+    STATE_REASON="no ${STATE_TRACKED_PATH} in worktree and none on ${OPT_REF}"
+  fi
+fi
+
+# extract_section <text> <title> — lines of the "## <title>" section body,
+# stopping at the next "## " header. Prints nothing when absent.
+extract_section() {
+  local text="${1}"
+  local title="${2}"
+  printf '%s\n' "${text}" | awk -v hdr="## ${title}" '
+    {
+      line = $0
+      sub(/[[:space:]]+$/, "", line)
+      if (in_sec && line ~ /^## /) { exit }
+      if (line == hdr) { in_sec = 1; next }
+      if (in_sec) { print }
+    }
+  '
+}
+
+RUNLOG_TEXT=""
+RUNLOG_AVAILABLE=0
+if [[ "${STATE_AVAILABLE}" -eq 1 ]]; then
+  if printf '%s\n' "${STATE_TEXT}" | grep -qE '^## Run Log[[:space:]]*$'; then
+    RUNLOG_TEXT="$(extract_section "${STATE_TEXT}" "Run Log")"
+    RUNLOG_AVAILABLE=1
+  fi
+fi
+
+# --- compliance epoch ------------------------------------------------------
+
+EPOCH=""
+EPOCH_PARSED=0
+EPOCH_PLACED=0
+EPOCH_PROBLEM=""
+
+if [[ "${STATE_AVAILABLE}" -eq 1 ]]; then
+  epoch_section="$(extract_section "${STATE_TEXT}" "Compliance Epoch")"
+  epoch_line="$(printf '%s\n' "${epoch_section}" | grep -m1 -E '^Epoch:[[:space:]]*[0-9A-Fa-f]{40}[[:space:]]*$' || true)"
+  if [[ -n "${epoch_line}" ]]; then
+    EPOCH="$(printf '%s' "${epoch_line}" | sed -E 's/^Epoch:[[:space:]]*//; s/[[:space:]]*$//' | tr 'A-F' 'a-f')"
+    EPOCH_PARSED=1
+    if git -C "${REPO_ROOT}" merge-base --is-ancestor "${EPOCH}" "${REF_SHA}" 2>/dev/null; then
+      EPOCH_PLACED=1
+    fi
+  fi
+fi
+
+if [[ "${STATE_AVAILABLE}" -ne 1 ]]; then
+  EPOCH_PROBLEM="no state file available (${STATE_REASON})"
+elif [[ "${EPOCH_PARSED}" -ne 1 ]]; then
+  EPOCH_PROBLEM="state file lacks a parseable ## Compliance Epoch (missing section or malformed 'Epoch: <40-hex>' line)"
+elif [[ "${EPOCH_PLACED}" -ne 1 ]]; then
+  EPOCH_PROBLEM="epoch ${EPOCH} is not an ancestor of ${OPT_REF} (or unknown locally) — fetch REF at --depth 50 or more"
+fi
+
+# --- prompt-touching commit enumeration on REF -----------------------------
+
+PROMPT_SHAS=()
+PROMPT_SUBJECTS=()
+PROMPT_POST_INDEX=()
+GRANDFATHERED=0
+
+if [[ "${EPOCH_PLACED}" -eq 1 ]]; then
+  while IFS= read -r entry; do
+    [[ -n "${entry}" ]] || continue
+    pc_sha="${entry%%$'\t'*}"
+    pc_subj="${entry#*$'\t'}"
+    PROMPT_SHAS+=("${pc_sha}")
+    PROMPT_SUBJECTS+=("${pc_subj}")
+    if git -C "${REPO_ROOT}" merge-base --is-ancestor "${pc_sha}" "${EPOCH}" 2>/dev/null; then
+      GRANDFATHERED=$((GRANDFATHERED + 1))
+    else
+      PROMPT_POST_INDEX+=("$((${#PROMPT_SHAS[@]} - 1))")
+    fi
+  done < <(git -C "${REPO_ROOT}" log --format='%H%x09%s' "${REF_SHA}" -- .orchestrator/prompts/)
+fi
+
+# --- check 1: spec-anchor ---------------------------------------------------
+# Tracker carries the Governing spec anchor bullet; the recorded sha256 must
+# match the bytes at the recorded path.
+
+check_spec_anchor() {
+  local name="spec-anchor"
+  local tracker="${REPO_ROOT}/docs/PROJECT_STATE.md"
+  if [[ ! -f "${tracker}" ]]; then
+    fail_line "${name}" "tracker missing at docs/PROJECT_STATE.md"
+    return 0
+  fi
+  local anchor_line
+  anchor_line="$(grep -m1 'Governing spec anchor' -- "${tracker}" || true)"
+  if [[ -z "${anchor_line}" ]]; then
+    fail_line "${name}" "tracker has no Governing spec anchor bullet"
+    return 0
+  fi
+  local recorded_sha
+  recorded_sha="$(printf '%s\n' "${anchor_line}" | grep -oE '[0-9A-Fa-f]{64}' | head -n1 || true)"
+  if [[ -z "${recorded_sha}" ]]; then
+    fail_line "${name}" "anchor bullet carries no 64-hex sha256"
+    return 0
+  fi
+  recorded_sha="$(printf '%s' "${recorded_sha}" | tr 'A-F' 'a-f')"
+  local recorded_path
+  recorded_path="$(printf '%s\n' "${anchor_line}" | grep -oE '`[^`]+`' | tr -d '`' | grep -m1 '^\.orchestrator/' || true)"
+  if [[ -z "${recorded_path}" ]]; then
+    fail_line "${name}" "anchor bullet carries no spec path under .orchestrator/"
+    return 0
+  fi
+  local spec_file="${REPO_ROOT}/${recorded_path}"
+  if [[ ! -f "${spec_file}" ]]; then
+    fail_line "${name}" "spec file missing at ${recorded_path}"
+    return 0
+  fi
+  local actual_sha
+  actual_sha="$(sha256sum -- "${spec_file}" | cut -d' ' -f1)"
+  if [[ "${actual_sha}" != "${recorded_sha}" ]]; then
+    fail_line "${name}" "sha256 mismatch for ${recorded_path} (recorded ${recorded_sha}, actual ${actual_sha})"
+    return 0
+  fi
+  pass_line "${name}"
+}
+
+# --- check 2: stub-first-line ----------------------------------------------
+# Every Run Log dispatch entry must carry the stub first line field with a
+# sanctioned value.
+
+check_stub_first_line() {
+  local name="stub-first-line"
+  local url
+  url="$(git -C "${REPO_ROOT}" remote get-url origin 2>/dev/null || true)"
+  if [[ -z "${url}" ]]; then
+    fail_line "${name}" "cannot derive expected header (origin remote unreadable)"
+    return 0
+  fi
+  local base
+  base="$(basename -- "${url}")"
+  base="${base%.git}"
+  local expected="${base:0:10} agent"
+  if [[ "${STATE_AVAILABLE}" -ne 1 ]]; then
+    fail_line "${name}" "no state file available (${STATE_REASON})"
+    return 0
+  fi
+  if [[ "${RUNLOG_AVAILABLE}" -ne 1 ]]; then
+    fail_line "${name}" "state file has no ## Run Log section"
+    return 0
+  fi
+  local line kind
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    [[ "${line}" =~ ^[[:space:]]*-[[:space:]] ]] || continue
+    [[ "${line}" == *"|"* ]] || continue
+    kind="$(printf '%s\n' "${line}" | cut -d'|' -f2 | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
+    if [[ "${kind}" == "dispatch" ]]; then
+      if [[ "${line}" == *"stub first line: ${expected}"* ]] \
+        || [[ "${line}" == *"stub first line: n/a (not dispatched)"* ]] \
+        || [[ "${line}" == *"stub first line: n/a (pre-adoption, prose dispatch)"* ]]; then
+        continue
+      fi
+      fail_line "${name}" "dispatch run-log line lacks a sanctioned stub first line field: ${line}"
+      return 0
+    fi
+  done <<< "${RUNLOG_TEXT}"
+  pass_line "${name}"
+}
+
+# --- check 3: publish-form --------------------------------------------------
+# Every prompt-touching commit strictly after the compliance epoch must use
+# the guarded publish form. Commits at or before the epoch are grandfathered.
+
+check_publish_form() {
+  local name="publish-form"
+  if [[ "${EPOCH_PLACED}" -ne 1 ]]; then
+    fail_line "${name}" "${EPOCH_PROBLEM}"
+    return 0
+  fi
+  if [[ "${#PROMPT_POST_INDEX[@]}" -eq 0 ]]; then
+    fail_line "${name}" "no prompt-touching commit after the compliance epoch on ${OPT_REF} — nothing to discriminate"
+    return 0
+  fi
+  local subject_re='^chore: publish [0-9]{3}-[a-z0-9-]+$'
+  local idx sha subj path bad
+  for idx in "${PROMPT_POST_INDEX[@]}"; do
+    sha="${PROMPT_SHAS[${idx}]}"
+    subj="${PROMPT_SUBJECTS[${idx}]}"
+    if [[ ! "${subj}" =~ ${subject_re} ]]; then
+      fail_line "${name}" "commit ${sha:0:12} subject not of form 'chore: publish NNN-slug': ${subj}"
+      return 0
+    fi
+    bad=""
+    while IFS= read -r path; do
+      [[ -n "${path}" ]] || continue
+      case "${path}" in
+        .orchestrator/prompts/*|"${PUBLISH_ALLOWED_STATE}") ;;
+        *)
+          bad="${path}"
+          break
+          ;;
+      esac
+    done < <(git -C "${REPO_ROOT}" show --name-only --format= "${sha}")
+    if [[ -n "${bad}" ]]; then
+      fail_line "${name}" "commit ${sha:0:12} touches a path outside .orchestrator/prompts/ and ${PUBLISH_ALLOWED_STATE}: ${bad}"
+      return 0
+    fi
+  done
+  pass_line "publish-form (${GRANDFATHERED} grandfathered pre-adoption)"
+}
+
+# --- check 4: run-log-coverage ----------------------------------------------
+# Every prompt sequence number on REF appears in the Run Log; every prompt
+# published after the epoch has a publish-kind entry.
+
+check_run_log_coverage() {
+  local name="run-log-coverage"
+  if [[ "${STATE_AVAILABLE}" -ne 1 ]]; then
+    fail_line "${name}" "no state file available (${STATE_REASON})"
+    return 0
+  fi
+  if [[ "${RUNLOG_AVAILABLE}" -ne 1 ]]; then
+    fail_line "${name}" "state file has no ## Run Log section"
+    return 0
+  fi
+  if [[ "${EPOCH_PLACED}" -ne 1 ]]; then
+    fail_line "${name}" "${EPOCH_PROBLEM}"
+    return 0
+  fi
+  local fname base seq
+  while IFS= read -r fname; do
+    [[ -n "${fname}" ]] || continue
+    base="$(basename -- "${fname}")"
+    [[ "${base}" =~ ^([0-9]{3})- ]] || continue
+    seq="${BASH_REMATCH[1]}"
+    if ! printf '%s\n' "${RUNLOG_TEXT}" | grep -qF -- "${seq}"; then
+      fail_line "${name}" "prompt seq ${seq} (${base}) absent from Run Log"
+      return 0
+    fi
+  done < <(git -C "${REPO_ROOT}" ls-tree --name-only "${REF_SHA}" .orchestrator/prompts/)
+  local idx sha path
+  for idx in "${PROMPT_POST_INDEX[@]}"; do
+    sha="${PROMPT_SHAS[${idx}]}"
+    while IFS= read -r path; do
+      [[ -n "${path}" ]] || continue
+      case "${path}" in
+        .orchestrator/prompts/*) ;;
+        *) continue ;;
+      esac
+      base="$(basename -- "${path}")"
+      [[ "${base}" =~ ^([0-9]{3})- ]] || continue
+      seq="${BASH_REMATCH[1]}"
+      if ! printf '%s\n' "${RUNLOG_TEXT}" | grep -F -- "${seq}" | grep -qE '^[[:space:]]*-[[:space:]]*[^|]*\|[[:space:]]*publish[[:space:]]*\|'; then
+        fail_line "${name}" "prompt seq ${seq} (${base}) published after the epoch lacks a publish run-log entry"
+        return 0
+      fi
+    done < <(git -C "${REPO_ROOT}" show --name-only --format= "${sha}")
+  done
+  pass_line "${name}"
+}
+
+# --- check 5: no-merge-into-orchestrator ------------------------------------
+# The orchestrator ref must carry zero merge commits. Shallow grafted
+# history is inconclusive and fails closed.
+
+check_no_merge() {
+  local name="no-merge-into-orchestrator"
+  local merges
+  merges="$(git -C "${REPO_ROOT}" rev-list --merges "${REF_SHA}" || true)"
+  if [[ -n "${merges}" ]]; then
+    local n first
+    n="$(printf '%s\n' "${merges}" | wc -l)"
+    n="${n//[[:space:]]/}"
+    first="${merges%%$'\n'*}"
+    fail_line "${name}" "${OPT_REF} contains ${n} merge commit(s) (first ${first:0:12}) — orchestrator branch must stay merge-free"
+    return 0
+  fi
+  local shallow
+  shallow="$(git -C "${REPO_ROOT}" rev-parse --is-shallow-repository 2>/dev/null || printf 'false')"
+  if [[ "${shallow}" == "true" ]]; then
+    local git_dir shallow_file
+    git_dir="$(git -C "${REPO_ROOT}" rev-parse --absolute-git-dir 2>/dev/null || true)"
+    shallow_file="${git_dir}/shallow"
+    if [[ -n "${git_dir}" && -f "${shallow_file}" ]]; then
+      local rev
+      while IFS= read -r rev; do
+        [[ -n "${rev}" ]] || continue
+        if grep -qxF -- "${rev}" "${shallow_file}"; then
+          fail_line "${name}" "shallow history of ${OPT_REF} reaches the graft boundary — merge ancestry inconclusive; fetch REF at --depth 50 or more"
+          return 0
+        fi
+      done < <(git -C "${REPO_ROOT}" rev-list "${REF_SHA}")
+    fi
+  fi
+  pass_line "${name}"
+}
+
+# --- run --------------------------------------------------------------------
+
+check_spec_anchor
+check_stub_first_line
+check_publish_form
+check_run_log_coverage
+check_no_merge
+
+if [[ "${FAILS}" -gt 0 ]]; then
+  exit 1
+fi
+exit 0
