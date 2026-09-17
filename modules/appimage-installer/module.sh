@@ -211,6 +211,8 @@ run() {
 }
 
 undo() {
+  # The shared helper removes every recorded entry and installed copy, then
+  # cleans the state files; it also owns the "Nothing to undo." behavior.
   desktop_undo "${MODULE_SLUG}"
   printf 'The original downloaded AppImage was never touched; it stays where you saved it.\n'
   return 0
