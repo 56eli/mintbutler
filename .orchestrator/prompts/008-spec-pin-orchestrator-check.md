@@ -85,6 +85,17 @@ instead of trust-based.
 
    `- Deferred gate hardening (PR #5 review, 2026-09-17): on hosts with passwordless sudo, bin/modulelint's sandboxed run of an elevated module can reach real sudo (observed there: an apt-get install -y flameshot attempt; package absent; nothing changed). Fix candidate: shadow sudo/pkexec on PATH during sandbox runs — awaiting owner decision. On interactive-sudo Mint with stdin closed, scans fail safe today.`
 
+   (c) Append this bullet as the LAST bullet of
+   `## 2. Architectural Invariants` (MERGE-verdict distillation of PR #5):
+
+   `- Elevated-module root path (PR #5, 2026-09-17): lib/elevate.sh is the ONLY sanctioned path to root; it refuses (plain error, exit 126) unless the calling module's manifest declares risk: elevated; modules hold reviewed command strings as data and never the sudo token; every elevated module records and restores its non-package changes.`
+
+   (d) Append this bullet as the LAST bullet of
+   `## 3. Settled Decisions & Rationale` (MERGE-verdict distillation of
+   PR #5):
+
+   `- Elevated-module honesty convention (PR #5, 2026-09-17): mixed or absent undo is stated plainly in the manifest description and in run/undo output — what is undoable, what stays; external-tool behavior is tested with PATH stubs and fake HOMEs only, and real system access remains owner acceptance.`
+
    Change nothing else in the tracker.
 4. **`bin/orchestrator-check` contract.** Zero-dependency bash
    (`#!/usr/bin/env bash`, `set -euo pipefail`, every expansion quoted),
@@ -216,9 +227,9 @@ Create:
 
 Modify:
 
-3. `docs/PROJECT_STATE.md` — append the two exact bullets of §4 fact 3
-   (anchor → last bullet of §2; deferred gate hardening → last bullet of
-   §3); nothing else.
+3. `docs/PROJECT_STATE.md` — append the four exact bullets of §4 fact 3
+   (anchor + elevate invariant → §2; deferred gate hardening + honesty
+   convention → §3); nothing else.
 4. `tests/run-tests.sh` — add stage (z) per §4 fact 7; stages (a)–(y)
    untouched and passing.
 

@@ -18,7 +18,7 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 004 | .orchestrator/prompts/004-revise-shortcut-creator-sc2086.md | REVISION of PR #3: shellcheck-clean test-launch word splitting | arena/01a0ac62-mintbutler (continued) | #3 | Completed 2026-09-16 — fix verified, folded into PR #3 verdict |
 | 005 | .orchestrator/prompts/005-android-file-transfer.md | seed module android-file-transfer + lib/elevate.sh (completes v0.1) | — | — | CANCELLED 2026-09-16 — owner withdrew the need; prompt never dispatched (retained, bannered, DO NOT RUN) |
 | 006 | .orchestrator/prompts/006-batch1-convention-docs.md | batch #1 kickoff: menu-ordering convention, docs alignment, backlog stub | arena/01a0acb9-mintbutler (pinned; substitution recorded) | #4 | Merged 2026-09-17 (merge commit 8d0bd3e) |
-| 007 | .orchestrator/prompts/007-screenshot-studio.md | screenshot-studio: flameshot install + Print Screen dconf rebind, recorded-restore undo, lib/elevate.sh debut | arena/01a0accc-mintbutler (pinned; substitution recorded) | #5 | Reviewed 2026-09-17 — MERGE advised, awaiting operator merge |
+| 007 | .orchestrator/prompts/007-screenshot-studio.md | screenshot-studio: flameshot install + Print Screen dconf rebind, recorded-restore undo, lib/elevate.sh debut | arena/01a0accc-mintbutler (pinned; substitution recorded) | #5 | Merged 2026-09-17 (merge commit d576a42) |
 | 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (amended 2026-09-17 pre-dispatch: tracker deliverable now also carries the PR #5 Deferred gate-hardening row) | — | — | Published + amended 2026-09-17 — not yet dispatched |
 
 ## Active Milestone
@@ -41,7 +41,7 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [~] 005: android-file-transfer — CANCELLED by owner 2026-09-16 before dispatch
 - [x] 006: batch #1 convention + docs alignment (PR #4 merged 2026-09-17, commit 8d0bd3e)
 - [ ] 008: spec pin + bin/orchestrator-check — published + amended 2026-09-17; awaiting dispatch (owner ran 007 first)
-- [ ] 007: screenshot-studio — PR #5 reviewed 2026-09-17, MERGE advised; awaiting operator merge
+- [x] 007: screenshot-studio — PR #5 merged 2026-09-17 (d576a42)
 - [ ] 009: default-apps-editor (Pending — build order 2; order 30; xdg-mime, current-vs-new display)
 - [ ] 010: appimage-installer (Pending — build order 3; order 10; reuses lib/desktop-entry.sh)
 - [ ] 011: timeshift-guardian (Pending — build order 4; elevated, snapshots additive, order 80)
@@ -78,6 +78,8 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - Owner ruling 2026-09-16 (verbatim): "acceptance split is fine as long as all commands are non-destructive so running them on linux for the first time has no accidents" — every owner-acceptance command must be safe on a live machine.
 - Dispatch contract implemented in PR #1 (2026-09-16): menu runs `bash modules/<slug>/module.sh <action>`, CWD = repo root, env `MINTBUTLER_MODULE_DIR` / `MINTBUTLER_MODULE_SLUG` / `MINTBUTLER_LIB_DIR`; slugs validated against `^[a-z0-9-]+$`; manifest parser accepts only the MODULE_SPEC §2 subset, unknown field = broken.
 - Gate live since PR #2 (2026-09-16): every module PR requires `bin/modulelint` green (manifest/slug, bash -n, forbidden patterns, sandbox HOME/XDG execution with diff containment, optional strace). `./butler --scan` delegates to it. Containment honest limits: diff covers sandbox HOME always; strace only when installed; shellcheck-gated SC2086 for unquoted expansions, advisory when absent.
+- Elevated-module root path (PR #5 distillation, 2026-09-17): lib/elevate.sh is the ONLY sanctioned path to root — refuses (plain error, exit 126) unless the calling module's manifest declares risk: elevated; modules hold reviewed command strings as data, never the sudo token; recorded-restore undo for every non-package change. Carried to docs/PROJECT_STATE.md §2 via task 008.
+- Elevated-module honesty convention (PR #5 distillation, 2026-09-17): mixed/no undo is stated plainly in the manifest description and in run/undo output; external-tool behavior is tested with PATH stubs + fake HOMEs only, real system access stays owner acceptance. Carried to docs/PROJECT_STATE.md §3 via task 008.
 
 ## Settled Decisions (owner)
 - Name confirmed: "mintbutler is the decided name confirmed" — no rename (2026-09-16).
@@ -143,3 +145,5 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | refresh-main | PR #5 hand-back — main refreshed before two-dot diff
 - 2026-09-17 | verdict | 007 / PR #5 — MERGE advised: 3-stage gate (diff audit; harness 106/0 re-run by orchestrator under stub sudo; modulelint 2/2 PASS; scan/list/dry-run; bash -n; deliverables 1:1 vs prompt incl. byte-exact tracker edits)
 - 2026-09-17 | publish | 008-spec-pin-orchestrator-check amended in place pre-dispatch (adds PR #5 Deferred gate-hardening row to its tracker deliverable); verdict-time state publish in same commit
+- 2026-09-17 | refresh-main | owner reported PR #5 merged (d576a42); main refreshed, net diff = exactly PR #5 content, no surprises
+- 2026-09-17 | distillation | MERGE-verdict knowledge from 007: elevate root-path invariant + mixed-undo/stub-test honesty convention — recorded in invariants; tracker carry mandated via 008 deliverable (3rd pre-dispatch amendment)
