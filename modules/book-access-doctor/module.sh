@@ -37,6 +37,13 @@ set -euo pipefail
 # create root-owned /media/... mount points. The seam only prefixes the probe
 # path; it is unset on a real system, so there the probe is exactly
 # `test -w "<target>"`. Every reported path stays the real one.
+#
+# Elevated-command note: every elevated command is DISPLAYED through
+# lib/elevate.sh's elevate_command_line with its target shell-quoted, which is
+# what a human would type. The command STRING handed to elevate_run carries the
+# same target unquoted, because that helper splits the string into words itself
+# and never runs a shell — quotes inside it would reach mount as literal
+# characters and the real remount would fail.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${MINTBUTLER_LIB_DIR:-$(cd "${SCRIPT_DIR}/../../lib" && pwd)}"
@@ -312,8 +319,158 @@ run() {
     exit 0
   fi
 
-  printf 'A read-only mount was found; the repair path is not implemented yet.\n' >&2
-  exit 1
+  # (vii) the ONE repair this module ships: an elevated remount read-write of
+  # the first read-only mount, offered only for a filesystem type it can help.
+  local target="${MOUNT_TARGETS[candidate]}"
+  local source="${MOUNT_SOURCES[candidate]}"
+  local fstype="${MOUNT_FSTYPES[candidate]}"
+  local options="${MOUNT_OPTIONS[candidate]}"
+
+  if ! fstype_is_remountable "${fstype}"; then
+    printf 'Verdict: %s is mounted read-only, but remounting read-write does not apply to this filesystem type (%s).\n' "${target}" "${fstype}"
+    printf 'Such a medium is read-only by design — a pressed disc or a disc image. Copy what you need off it instead; no changes were made.\n'
+    exit 0
+  fi
+
+  if [[ "${#MOUNT_TARGETS[@]}" -gt 1 ]]; then
+    printf '  The repair below applies to the first read-only mount only; every other mount is reported above exactly as it is.\n'
+  fi
+
+  local current_word="mounted read-only (ro), not writable"
+  if has_option "${options}" rw; then
+    current_word="mounted read-write (rw) but refusing writes"
+  elif [[ "${MOUNT_WRITABLE[candidate]}" == "1" ]]; then
+    current_word="mounted read-only (ro), though the mount point answers as writable"
+  fi
+
+  printf '\nThe read-only mount is the repairable culprit here:\n'
+  printf '  current:  %s — %s, %s from %s\n' "${target}" "${current_word}" "${fstype}" "${source}"
+  printf '  proposed: the same mount remounted read-write (rw); nothing else about it changes\n'
+  printf '  command:  %s\n' "$(elevate_command_line "mount -o remount,rw '${target}'")"
+  if has_option "${options}" rw; then
+    printf '  note:     this mount already reports read-write, so a remount may change nothing — the refusal comes from the device or its filesystem, and mintbutler changes no permission anywhere.\n'
+  fi
+  printf 'A remount lasts until the device is unplugged or the machine reboots: mintbutler never writes /etc/fstab and never changes a permission.\n'
+
+  # The ONE question this module asks (manifest asks: 1); Enter or EOF means NO.
+  if ! ask_yn "Remount ${target} read-write now (recorded first; undo restores read-only)"; then
+    printf 'Nothing changed.\n'
+    exit 0
+  fi
+
+  # Record the target and its exact previous options BEFORE anything runs, so
+  # undo can restore the pre-repair state even if the remount half-succeeds.
+  mkdir -p "${STATE_DIR}"
+  {
+    printf 'target=%s\n' "${target}"
+    printf 'prev_opts=%s\n' "${options}"
+  } > "${STATE_FILE}"
+  printf 'Recorded the previous mount options in %s\n' "${STATE_FILE}"
+
+  # The single elevated step. lib/elevate.sh splits the command string into
+  # words itself and never runs a shell, so the target is passed unquoted here
+  # while the human-facing display above shows the shell-quoted form of exactly
+  # the same command.
+  local remount_code=0
+  elevate_run "mount -o remount,rw ${target}" || remount_code="$?"
+  if [[ "${remount_code}" -ne 0 ]]; then
+    printf 'The remount failed (the elevated command exited %d); the record is kept at %s — undo can remount read-only to restore the previous state.\n' "${remount_code}" "${STATE_FILE}" >&2
+    exit 1
+  fi
+
+  # Verify by re-reading the mount table; the record is kept on any doubt.
+  local verify_opts="" verify_code=0
+  verify_opts="$(findmnt -n -o OPTIONS "${target}" 2>/dev/null)" || verify_code="$?"
+  if [[ "${verify_code}" -ne 0 ]] || ! has_option "${verify_opts}" rw || has_option "${verify_opts}" ro; then
+    printf 'The remount did not take (the mount table still reads read-only for %s); the record is kept at %s — undo can remount read-only to restore the previous state.\n' "${target}" "${STATE_FILE}" >&2
+    exit 1
+  fi
+
+  printf 'Remounted read-write: %s takes writes now — the reader should accept files immediately.\n' "${target}"
+  printf 'The previous options (%s) are recorded at %s; [u]ndo in the menu remounts it read-only again.\n' "${options}" "${STATE_FILE}"
+  printf 'This lasts until the device is unplugged or the machine reboots. Keeping it across reboots would need a persistent mount entry — INFORMATIONAL ONLY, mintbutler will not write it:\n'
+  printf '  %s  %s  %s  defaults,noauto  0  0\n' "${source}" "${target}" "${fstype}"
+  printf "Add that with Mint's Disks app (select the partition, then Additional Partition Options and Edit Mount Options) instead of hand-editing /etc/fstab.\n"
+  exit 0
+}
+
+undo() {
+  if [[ ! -f "${STATE_FILE}" ]]; then
+    printf 'Nothing to undo.\n'
+    printf 'Note: the diagnosis steps and verdicts are read-only and never needed undoing.\n'
+    return 0
+  fi
+
+  # Preflight: an honest refusal when the tools are gone — the record is kept so
+  # a later undo can still restore the pre-repair read-only state.
+  local missing="" tool
+  for tool in findmnt mount; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+      if [[ -z "${missing}" ]]; then
+        missing="${tool}"
+      else
+        missing="${missing}, ${tool}"
+      fi
+    fi
+  done
+  if [[ -n "${missing}" ]]; then
+    printf 'Cannot undo: the mount tools (%s) are missing, so the recorded mount cannot be remounted read-only; the record is kept at %s.\n' "${missing}" "${STATE_FILE}" >&2
+    return 1
+  fi
+
+  local rec_target="" rec_opts="" record_line
+  while IFS= read -r record_line || [[ -n "${record_line}" ]]; do
+    case "${record_line}" in
+      target=*)
+        rec_target="${record_line#target=}"
+        ;;
+      prev_opts=*)
+        rec_opts="${record_line#prev_opts=}"
+        ;;
+    esac
+  done < "${STATE_FILE}"
+
+  if [[ -z "${rec_target}" || -z "${rec_opts}" ]]; then
+    printf 'Cannot undo: the record at %s is unreadable; refusing to guess.\n' "${STATE_FILE}" >&2
+    return 1
+  fi
+  case "${rec_target}" in
+    /media/*|/run/media/*)
+      ;;
+    *)
+      printf 'Cannot undo: the record at %s names %s, which is not a removable mount point; refusing to guess.\n' "${STATE_FILE}" "${rec_target}" >&2
+      return 1
+      ;;
+  esac
+
+  printf 'Undoing the remount: %s goes back to the read-only state it had before the repair.\n' "${rec_target}"
+  printf 'Elevated step: %s\n' "$(elevate_command_line "mount -o remount,ro '${rec_target}'")"
+
+  # lib/elevate.sh splits the command string into words itself, so the recorded
+  # target is passed unquoted here; the display above is the quoted form of the
+  # very same command.
+  local undo_code=0
+  elevate_run "mount -o remount,ro ${rec_target}" || undo_code="$?"
+  if [[ "${undo_code}" -ne 0 ]]; then
+    printf 'Could not remount %s read-only (the elevated command exited %d); the record is kept at %s.\n' "${rec_target}" "${undo_code}" "${STATE_FILE}" >&2
+    return 1
+  fi
+
+  local verify_opts="" verify_code=0
+  verify_opts="$(findmnt -n -o OPTIONS "${rec_target}" 2>/dev/null)" || verify_code="$?"
+  if [[ "${verify_code}" -ne 0 ]] || ! has_option "${verify_opts}" ro; then
+    printf 'The read-only remount could not be verified for %s (the mount table reads: %s); the record is kept at %s.\n' "${rec_target}" "${verify_opts:-unreadable}" "${STATE_FILE}" >&2
+    return 1
+  fi
+
+  rm -f "${STATE_FILE}"
+  rmdir "${STATE_DIR}" 2>/dev/null || true
+
+  printf 'Restored: %s is mounted read-only again — the state before the repair.\n' "${rec_target}"
+  printf 'Its recorded options were: %s\n' "${rec_opts}"
+  printf 'Anything written to the device while it was read-write stays on it; new writes stop now.\n'
+  printf 'The state record was deleted. The diagnosis steps and verdicts are read-only and never needed undoing.\n'
+  return 0
 }
 
 main() {
@@ -332,8 +489,7 @@ main() {
       run
       ;;
     undo)
-      printf 'undo is not implemented yet.\n' >&2
-      exit 1
+      undo
       ;;
     *)
       printf 'Unknown action: %s\n' "${action}" >&2
