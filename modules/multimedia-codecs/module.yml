@@ -1,0 +1,8 @@
+title: Multimedia codecs
+description: >-
+  Checks a curated codec bundle — GStreamer bad/ugly plugin sets, GStreamer libav, and libavcodec-extra — against what is already installed, names exactly what is missing in plain words, and after one confirmation installs only the missing packages via a single elevated apt-get step with per-package verification. Package installs are not undone by the module; the exact manual removal command is printed instead of a fake undo.
+risk: elevated
+undo: false
+needs: [dpkg, apt-get]
+asks: 1
+order: 40
