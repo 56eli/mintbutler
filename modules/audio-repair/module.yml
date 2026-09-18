@@ -1,0 +1,8 @@
+title: Audio repair
+description: >-
+  Diagnoses the sound stack first — PipeWire/Pulse status, sinks, mixer state, and the kernel log for firmware or driver errors — then prints an honest verdict. The one repair it applies, restoring a muted Master control, is recorded and restorable on undo; driver-level problems get a plain newer-kernel verdict instead of a fake fix.
+risk: elevated
+undo: true
+needs: [pactl, amixer]
+asks: 1
+order: 910
