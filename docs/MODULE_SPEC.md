@@ -149,7 +149,13 @@ Runs on every PR (and via `./butler --scan` locally). A module passes only if:
    exit 0 and produce a non-empty plan; filesystem diff must be empty.
 5. `run` executed in the same sandbox must either succeed, or fail with a
    plain-language stderr line — and never touch anything outside the
-   sandbox HOME (strace/diff verified when available).
+   sandbox HOME (strace/diff verified when available). The sandbox PATH
+   additionally shadows `sudo` and the session mutators (`amixer`,
+   `lpoptions`, `dconf`) with refusing stubs (MB-002): a module under lint
+   can never reach real privilege or real user settings — `'needs: sudo'`
+   and elevated behavior are simulated by the test harness's stub stages,
+   while the module contract itself (describe/plan/dry-run/run) is
+   exercised here against refusal-or-success already.
 6. 23-line law, fully mechanical (MB-003): `describe`, `plan`, and `dry-run`
    stdout must each render in at most 23 terminal lines (strict line count,
    no exceptions). The test suite additionally renders every module's menu

@@ -446,6 +446,21 @@ lint_module() {
   mkdir -p "${sandbox_home}/.local/state"
   mkdir -p "${sandbox_home}/.cache"
 
+  # A module under lint must never reach real privilege or real session
+  # settings (MB-002): shadow the elevated executor (sudo) and the session
+  # mutators (amixer, lpoptions, dconf) with refusing stubs on the sandbox
+  # PATH. Contract: 'needs: sudo' and module behavior are simulated by the
+  # harness stages against their own stubs; inside modulelint these tools
+  # always refuse. (In this container no real sudo exists; the check is
+  # simulated offline.)
+  local sandbox_bin="${sandbox_root}/bin"
+  mkdir -p "${sandbox_bin}"
+  local stub_tool
+  for stub_tool in sudo amixer lpoptions dconf; do
+    printf '#!/usr/bin/env bash\nprintf "modulelint-sandbox stub: %s is disabled during lint; a module must never reach real privilege or session settings here.\\n" "%s" >&2\nexit 1\n' "${stub_tool}" "${stub_tool}" > "${sandbox_bin}/${stub_tool}"
+    chmod +x "${sandbox_bin}/${stub_tool}"
+  done
+
   local timeout_cmd=()
   if command -v timeout >/dev/null 2>&1; then
     timeout_cmd=(timeout 30)
@@ -465,6 +480,7 @@ lint_module() {
 
     (
       cd "${REPO_ROOT}"
+      PATH="${sandbox_bin}:${PATH}" \
       HOME="${sandbox_home}" \
       XDG_DATA_HOME="${sandbox_home}/.local/share" \
       XDG_CONFIG_HOME="${sandbox_home}/.config" \
@@ -559,6 +575,7 @@ lint_module() {
   if [[ "${use_strace}" -eq 1 ]]; then
     (
       cd "${REPO_ROOT}"
+      PATH="${sandbox_bin}:${PATH}" \
       HOME="${sandbox_home}" \
       XDG_DATA_HOME="${sandbox_home}/.local/share" \
       XDG_CONFIG_HOME="${sandbox_home}/.config" \

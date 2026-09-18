@@ -4,12 +4,47 @@ set -euo pipefail
 # tests/run-tests.sh — zero-dependency harness.
 # Copies butler + lib/ + fixture modules into a temp dir and runs
 # the real script there. No production hooks.
+#
+# Real-sudo consent switch (owner ruling 2026-09-18, MB-002):
+# Elevated stages exercise modules through STUB binaries on controlled PATHs
+# and must never reach a real sudo. By default this harness installs a
+# REFUSING, RECORDING sudo stub first on its own PATH — anything that would
+# reach the real sudo through the harness path trips the stub instead. The
+# real-sudo lane (stage bx) runs only when the harness is invoked with
+# explicit consent:
+#
+#   MB_TEST_ALLOW_REAL_SUDO=1 bash tests/run-tests.sh
+#
+# Without consent, stage (bx) reports itself skipped and stage (by) proves
+# the tripwire held: zero real sudo attempts across the whole run.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 TMPBASE="$(mktemp -d)"
 trap 'rm -rf "${TMPBASE}"' EXIT
+
+MB_TEST_ALLOW_REAL_SUDO="${MB_TEST_ALLOW_REAL_SUDO:-0}"
+MB_SUDO_TRIPWIRE_LOG=""
+MB_SAFE_BIN=""
+MB_SAFE_STUB_SHA=""
+if [[ "${MB_TEST_ALLOW_REAL_SUDO}" != "1" ]]; then
+  MB_SAFE_BIN="${TMPBASE}/mb-safe-bin"
+  mkdir -p "${MB_SAFE_BIN}"
+  MB_SUDO_TRIPWIRE_LOG="${TMPBASE}/mb-sudo-tripwire.log"
+  : > "${MB_SUDO_TRIPWIRE_LOG}"
+  cat <<'MB_SAFE_SUDO_STUB' > "${MB_SAFE_BIN}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sudo %s\n' "$*" >> "${MB_SUDO_TRIPWIRE_LOG:?}"
+printf 'mb-safe-sudo: the real sudo is disabled inside the mintbutler test harness (set MB_TEST_ALLOW_REAL_SUDO=1 to consent)\n' >&2
+exit 1
+MB_SAFE_SUDO_STUB
+  chmod +x "${MB_SAFE_BIN}/sudo"
+  PATH="${MB_SAFE_BIN}:${PATH}"
+  MB_SAFE_STUB_SHA="$(sha256sum "${MB_SAFE_BIN}/sudo" | cut -d' ' -f1)"
+fi
+export MB_SUDO_TRIPWIRE_LOG
 
 STAGE="${TMPBASE}/stage"
 mkdir -p "${STAGE}"
@@ -6290,7 +6325,7 @@ fi
 
 BU_HOSTILE="it's \$HOME; reboot"
 bu_disp="$(env "${BU_LIB_ENV[@]}" BU_WORD="${BU_HOSTILE}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line timeshift --create --comments "${BU_WORD}"')"
-bu_expected="sudo timeshift --create --comments 'it'\''s \$HOME; reboot"
+bu_expected="sudo timeshift --create --comments 'it'\\''s \$HOME; reboot'"
 if [[ "${bu_disp}" == "${bu_expected}" ]]; then
   pass "elevate display: a hostile word (spaces, quotes, \$, ;) derives the escaped display a human would type"
 else
@@ -6647,7 +6682,62 @@ if [[ "${code_bw_notty}" -eq 1 ]] \
 else
   fail "piping an elevated module without a terminal still refuses (got ${code_bw_notty}: $(cat "${BW_NO_TTY_OUT}"))"
 fi
+# ---------------------------------------------------------------------------
+# Stage (bx): the real-sudo lane (MB-002), report-only and consent-gated.
+# Skipped unless MB_TEST_ALLOW_REAL_SUDO=1; with consent it probes
+# `sudo -n true`, reports the result, and always passes.
+# ---------------------------------------------------------------------------
+printf 'Stage bx: real-sudo lane (consent-gated)\n'
+if [[ "${MB_TEST_ALLOW_REAL_SUDO}" == "1" ]]; then
+  bx_sudo_path="$(command -v sudo || true)"
+  if [[ -z "${bx_sudo_path}" ]]; then
+    pass "real-sudo lane (consent given): no sudo binary on this host — nothing to probe"
+  else
+    code_bx_probe="0"
+    sudo -n true >/dev/null 2>&1 || code_bx_probe="$?"
+    pass "real-sudo lane (consent given): sudo -n true probe report-only (exit ${code_bx_probe})"
+  fi
+else
+  pass "real-sudo lane skipped (no consent): set MB_TEST_ALLOW_REAL_SUDO=1 to enable the report-only probe"
+fi
 
+# ---------------------------------------------------------------------------
+# Stage (by): the tripwire (MB-002). With consent unset, prove the harness
+# PATH sudo is the refusing stub, prove the stub works (a deliberate probe is
+# recorded and refused), and prove the entire run before this file wrote
+# exactly ONE attempt into the log — the probe itself — i.e. zero real sudo
+# attempts happened anywhere in the suite.
+# ---------------------------------------------------------------------------
+printf 'Stage by: tripwire (zero real sudo attempts without consent)\n'
+if [[ "${MB_TEST_ALLOW_REAL_SUDO}" == "1" ]]; then
+  pass "tripwire disarmed by consent (MB_TEST_ALLOW_REAL_SUDO=1) — the safe stub was never installed"
+else
+  by_sudo_path="$(command -v sudo || true)"
+  by_probe_code="0"
+  sudo mb-tripwire-probe-marker >/dev/null 2>&1 || by_probe_code="$?"
+  by_probe_seen="0"
+  if grep -Fq "sudo mb-tripwire-probe-marker" "${MB_SUDO_TRIPWIRE_LOG}"; then
+    by_probe_seen="1"
+  fi
+  if [[ "${by_sudo_path}" == "${MB_SAFE_BIN}/sudo" && "${by_probe_code}" -eq 1 && "${by_probe_seen}" -eq 1 ]]; then
+    pass "the harness sudo resolves to the refusing recording stub (probe: logged, refused exit 1)"
+  else
+    fail "the harness sudo resolves to the refusing recording stub (got path=${by_sudo_path} code=${by_probe_code} seen=${by_probe_seen})"
+  fi
+
+  by_attempts="$(grep -c . "${MB_SUDO_TRIPWIRE_LOG}" || true)"
+  if [[ "${by_attempts}" -eq 1 ]]; then
+    pass "the whole suite produced zero real sudo attempts (only the deliberate probe reached the stub)"
+  else
+    fail "the whole suite produced zero real sudo attempts (tripwire holds ${by_attempts} lines: $(cat "${MB_SUDO_TRIPWIRE_LOG}"))"
+  fi
+
+  if [[ "$(sha256sum "${MB_SAFE_BIN}/sudo" | cut -d' ' -f1)" == "${MB_SAFE_STUB_SHA}" ]]; then
+    pass "the refusing sudo stub in the harness bin is unchanged"
+  else
+    fail "the refusing sudo stub was modified during the run"
+  fi
+fi
 
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then

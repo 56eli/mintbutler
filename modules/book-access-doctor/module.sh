@@ -41,9 +41,10 @@ set -euo pipefail
 # `test -w "<target>"`. Every reported path stays the real one.
 #
 # Elevated-command note: every elevated command travels as an ARGV LIST from
-# this module to sudo (lib/elevate.sh, MB-001) — the target is one argv word,
-# so spaces or shell metacharacters in it can never smuggle extra words. The
-# displayed command line is DERIVED from that same list, quoting only the
+# this module to the elevated executor (lib/elevate.sh, MB-001) — the target
+# is one argv word, so spaces or shell metacharacters in it can never smuggle
+# extra words.
+# The displayed command line is DERIVED from that same list, quoting only the
 # words that need it, exactly as a human would type them.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -362,8 +363,8 @@ run() {
   } > "${STATE_FILE}"
   printf 'Recorded the previous mount options in %s\n' "${STATE_FILE}"
 
-  # The single elevated step. The target is ONE argv word from here to sudo
-  # (MB-001); the human-facing display above is derived from the same list.
+  # The single elevated step. The target is ONE argv word from here to the
+  # executor (MB-001); the display above is derived from the same list.
   local remount_code=0
   elevate_run mount -o remount,rw "${target}" || remount_code="$?"
   if [[ "${remount_code}" -ne 0 ]]; then
