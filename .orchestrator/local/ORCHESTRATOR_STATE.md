@@ -26,7 +26,7 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 012 | .orchestrator/prompts/012-revise-timeshift-guardian-sudo-display.md | REVISION of PR #10: helper-driven elevated-command display, no sudo literals in module.sh | arena/01a0b18d-mintbutler (continued) | #10 | Completed 2026-09-17 — fix verified; PR #10 merged a41bfb3 |
 | 013 | .orchestrator/prompts/013-audio-repair.md | audio-repair: diagnose-first sound doctor, honest newer-kernel verdict, one recorded undoable Master repair, elevated dmesg read | arena/01a0b1e6-mintbutler (pinned; substitution recorded in PR) | #11 | Merged 2026-09-17 (merge commit bb25037) |
 | 014 | .orchestrator/prompts/014-multimedia-codecs.md | multimedia-codecs: diagnose-first curated codec install, single elevated apt-get step, honest no-undo, order 40 | arena/01a0b3b3-mintbutler (pinned; substitution recorded in PR) | #12 | Merged 2026-09-17 (merge commit a2ecf27) |
-| 015 | .orchestrator/prompts/015-printer-helper.md | printer-helper: diagnose-first CUPS doctor + recorded default-printer repair, risk user, never vendor blobs, order 60 | — | — | Published + dispatched 2026-09-17 |
+| 015 | .orchestrator/prompts/015-printer-helper.md | printer-helper: diagnose-first CUPS doctor + recorded default-printer repair, risk low (confirmed token), never vendor blobs, order 60 | arena/01a0b3eb-mintbutler (pinned; substitution recorded in PR) | #13 | Reviewed 2026-09-17 — MERGE advised; awaiting operator merge |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -54,7 +54,7 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] 011: timeshift-guardian — PR #10 merged 2026-09-17 (a41bfb3) after revision 012
 - [x] 013: audio-repair — PR #11 merged 2026-09-17 (bb25037)
 - [x] 014: multimedia-codecs — PR #12 merged 2026-09-17 (a2ecf27)
-- [~] 015: printer-helper — IN PROGRESS (build order 7; diagnose-first CUPS doctor, one recorded default-printer repair, zero elevation, never vendor blobs, order 60); prompt 015 published + dispatched
+- [~] 015: printer-helper — PR #13 reviewed 2026-09-17, MERGE advised (battery 407/0, modulelint 8/8, manifest/tracker byte-exact, zero-elevation source assertions in harness, risk:low confirmed token); awaiting operator merge
 - [ ] 014: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
 - [ ] 015: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
 - [ ] 016: system-report-pack (Pending — build order 8; order 70; additive report file, never installs inxi — plain-tool fallback)
@@ -199,3 +199,5 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | refresh-main | owner reported PR #12 merged (a2ecf27); main refreshed, net diff = exactly PR #12 content
 - 2026-09-17 | publish | 015-printer-helper published (conforming form; stage letters (bd)-(bi); risk token to be confirmed by agent from existing user-level modules; zero-elevation invariant; tracker deliverable names task 016 system-report-pack)
 - 2026-09-17 | dispatch | 015 handed to operator; stub first line: mintbutler agent
+- 2026-09-17 | review | 015 / PR #13 — MERGE advised: diff = exactly the 4 deliverables; suite 407/0 (+68, stages (bd)-(bi)); modulelint 8/8 incl. PASS printer-helper; --scan exit 0; --list shows module WITHOUT elevated badge; plan 13 / dry-run 22 lines; manifest byte-exact with risk: low (repo vocabulary — prompt guessed 'user', agent used its own tie-break and recorded it: correct behavior); tracker §4 byte-exact (task 016 system-report-pack); harness includes source-grep assertions for zero sudo/pkexec literals and no lib/elevate.sh sourcing; live sandbox preflight exit 1 verified; record-before-apply + apply-fail-deletes-record + undo-with-verify all in code; PR body complete incl. two honest Session Irregularities (risk-token conflict, branch substitution)
+- 2026-09-17 | distillation | MERGE-verdict knowledge from 015: (a) manifest risk vocabulary is EXACTLY low|elevated per lib/manifest.sh — user-level modules use risk: low; future prompts must not guess 'user'; (b) user-level repair apply-failure convention = DELETE the record and report nothing-changed (contrast: elevated audio-repair keeps the record for undo when apply fails mid-way)
