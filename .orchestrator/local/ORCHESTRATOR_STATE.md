@@ -27,7 +27,8 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 013 | .orchestrator/prompts/013-audio-repair.md | audio-repair: diagnose-first sound doctor, honest newer-kernel verdict, one recorded undoable Master repair, elevated dmesg read | arena/01a0b1e6-mintbutler (pinned; substitution recorded in PR) | #11 | Merged 2026-09-17 (merge commit bb25037) |
 | 014 | .orchestrator/prompts/014-multimedia-codecs.md | multimedia-codecs: diagnose-first curated codec install, single elevated apt-get step, honest no-undo, order 40 | arena/01a0b3b3-mintbutler (pinned; substitution recorded in PR) | #12 | Merged 2026-09-17 (merge commit a2ecf27) |
 | 015 | .orchestrator/prompts/015-printer-helper.md | printer-helper: diagnose-first CUPS doctor + recorded default-printer repair, risk low (confirmed token), never vendor blobs, order 60 | arena/01a0b3eb-mintbutler (pinned; substitution recorded in PR) | #13 | Merged 2026-09-17 (merge commit aa77fa7) |
-| 016 | .orchestrator/prompts/016-system-report-pack.md | system-report-pack: read-only plain-text system report, zero installs (never inxi), risk low, order 70 | arena/01a0b487-mintbutler (pinned; substitution recorded in PR) | #14 | Reviewed 2026-09-17 — MERGE advised; awaiting operator merge |
+| 016 | .orchestrator/prompts/016-system-report-pack.md | system-report-pack: read-only plain-text system report, zero installs (never inxi), risk low, order 70 | arena/01a0b487-mintbutler (pinned; substitution recorded in PR) | #14 | Merged 2026-09-17 (merge commit f37c699) |
+| 017 | .orchestrator/prompts/017-book-access-doctor.md | book-access-doctor: diagnose-first e-reader mount doctor, one elevated remount-rw repair with undo, print-only fstab guidance, targeted grants only (never chmod -R), order 900 | — | — | Published + dispatched 2026-09-17 |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -56,7 +57,8 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] 013: audio-repair — PR #11 merged 2026-09-17 (bb25037)
 - [x] 014: multimedia-codecs — PR #12 merged 2026-09-17 (a2ecf27)
 - [x] 015: printer-helper — PR #13 merged 2026-09-17 (aa77fa7)
-- [~] 016: system-report-pack — PR #14 reviewed 2026-09-17, MERGE advised (battery 460/0, modulelint 9/9, manifest/tracker byte-exact, zero-side-effect invariants harness-asserted); awaiting operator merge
+- [x] 016: system-report-pack — PR #14 merged 2026-09-17 (f37c699)
+- [~] 017: book-access-doctor — IN PROGRESS (build order 9, FINAL batch module; elevated remount-rw repair with undo, print-only fstab, zero chmod, order 900); prompt 017 published + dispatched
 - [ ] 014: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
 - [ ] 015: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
 - [ ] 016: system-report-pack (Pending — build order 8; order 70; additive report file, never installs inxi — plain-tool fallback)
@@ -208,3 +210,6 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | dispatch | 016 handed to operator; stub first line: mintbutler agent
 - 2026-09-17 | review | 014 / PR #14 — MERGE advised: diff = exactly the 4 deliverables; suite 460/0 (+53, stages (bj)-(bl)); modulelint 9/9 incl. PASS system-report-pack; --scan exit 0; --list no elevated badge; menu detail screen asserts NO [u]ndo affordance (undo:false); plan/dry-run 16 lines with never-inxi + writes-nothing statements; manifest byte-exact; tracker §4 byte-exact (task 017 book-access-doctor with all three owner rulings); source greps assert zero sudo/pkexec, no elevate/ask sourcing, no package-manager invocation; LIVE sandbox run verified: 7-line full report, all sections render, exit 0, nothing written; honest degradation path harness-verified; PR body complete incl. branch-substitution irregularity
 - 2026-09-17 | distillation | MERGE-verdict knowledge from 016: (a) zero-side-effect module pattern proven — asks 0, undo false, no elevation, no helper sourcing; stub call-logs can assert the EXACT read-only invocation set; (b) env-var seam convention for non-PATH-stubbable reads — documented in-code override (MINTBUTLER_OS_RELEASE_FILE style) defaulting to the real path, read-only
+- 2026-09-17 | refresh-main | owner reported PR #14 merged (f37c699); main refreshed, net diff = exactly PR #14 content
+- 2026-09-17 | publish | 017-book-access-doctor published (conforming form; stage letters (bm)-(br); all three owner rulings embedded: remount-as-elevated OK, fstab PRINT-ONLY, targeted-grants-only → zero chmod in v1; tracker deliverable marks batch #1 complete after merge)
+- 2026-09-17 | dispatch | 017 handed to operator; stub first line: mintbutler agent
