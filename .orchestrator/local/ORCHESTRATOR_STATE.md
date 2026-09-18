@@ -24,7 +24,8 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 010 | .orchestrator/prompts/010-appimage-installer.md | appimage-installer: user-level AppImage install reusing lib/desktop-entry.sh, copy-never-move, undo removes entry+copy | arena/01a0b0c2-mintbutler + arena/01a0b14e-mintbutler (duplicate dispatch — see 2026-09-17 process note) | #8 (+#9 follow-up) | MERGED BEFORE REVIEW 2026-09-17 (d046064, b930e0b) — health+content branch run post-hoc: FULLY GREEN, no defects, no follow-up |
 | 011 | .orchestrator/prompts/011-timeshift-guardian.md | timeshift-guardian: diagnose-first Timeshift guardian, one confirmed additive snapshot, elevated, no undo (additive policy) | arena/01a0b18d-mintbutler (pinned; substitution recorded) | #10 | Merged 2026-09-17 (merge commit a41bfb3, after revision 012) |
 | 012 | .orchestrator/prompts/012-revise-timeshift-guardian-sudo-display.md | REVISION of PR #10: helper-driven elevated-command display, no sudo literals in module.sh | arena/01a0b18d-mintbutler (continued) | #10 | Completed 2026-09-17 — fix verified; PR #10 merged a41bfb3 |
-| 013 | .orchestrator/prompts/013-audio-repair.md | audio-repair: diagnose-first sound doctor, honest newer-kernel verdict, one recorded undoable Master repair, elevated dmesg read | arena/01a0b1e6-mintbutler (pinned; substitution recorded in PR) | #11 | Reviewed 2026-09-17 — MERGE advised; awaiting operator merge |
+| 013 | .orchestrator/prompts/013-audio-repair.md | audio-repair: diagnose-first sound doctor, honest newer-kernel verdict, one recorded undoable Master repair, elevated dmesg read | arena/01a0b1e6-mintbutler (pinned; substitution recorded in PR) | #11 | Merged 2026-09-17 (merge commit bb25037) |
+| 014 | .orchestrator/prompts/014-multimedia-codecs.md | multimedia-codecs: diagnose-first curated codec install, single elevated apt-get step, honest no-undo, order 40 | — | — | Published + dispatched 2026-09-17 |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -50,7 +51,8 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] 009: default-apps-editor — PR #7 merged 2026-09-17 (9674a43)
 - [x] 010: appimage-installer — PR #8 (+#9) merged 2026-09-17 (d046064, b930e0b) before review; post-hoc gate 199/0 + deliverables 1:1
 - [x] 011: timeshift-guardian — PR #10 merged 2026-09-17 (a41bfb3) after revision 012
-- [~] 013: audio-repair — PR #11 reviewed 2026-09-17, MERGE advised (battery 277/0, modulelint 6/6, manifest/tracker byte-exact, no sudo literals, ask_yn default-NO honored); awaiting operator merge
+- [x] 013: audio-repair — PR #11 merged 2026-09-17 (bb25037)
+- [~] 014: multimedia-codecs — IN PROGRESS (build order 6; elevated install, honest no-undo, order 40); prompt published + dispatched
 - [ ] 014: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
 - [ ] 015: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
 - [ ] 016: system-report-pack (Pending — build order 8; order 70; additive report file, never installs inxi — plain-tool fallback)
@@ -186,3 +188,7 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | publish | 013-audio-repair published (conforming form; stage letters (ar)-(aw) derived from harness)
 - 2026-09-17 | dispatch | 013 handed to operator; stub first line: mintbutler agent
 - 2026-09-17 | review | 013 / PR #11 — MERGE advised: diff = exactly the 4 deliverables; suite 277/0 (+49 over 228, stages (ar)-(aw)); modulelint 6/6 incl. PASS audio-repair; --scan exit 0; --list badge ok; plan 14 / dry-run 23 lines; manifest byte-exact; tracker §4 byte-exact incl. task-012→014 fix; zero sudo/pkexec/eval literals (module + siblings regression-checked); bash -n clean; ask_yn default NO; record-before-apply + verify-mismatch rollback + undo-from-record all verified in code; Session Irregularities present (branch substitution disclosed)
+- 2026-09-17 | refresh-main | owner reported PR #11 merged (bb25037); main refreshed, net diff = exactly PR #11 content
+- 2026-09-17 | incident | worktree rewind mid-review wiped untracked .orchestrator/ incl. recovery dir (review-checkout rm -rf mistake); fully rebuilt from published orchestrator branch — recovery-from-remote works; future checkouts preserve .orchestrator/ first
+- 2026-09-17 | publish | 014-multimedia-codecs published (conforming form; stage letters (ax)-(bc); tracker deliverable names task 015 printer-helper)
+- 2026-09-17 | dispatch | 014 handed to operator; stub first line: mintbutler agent
