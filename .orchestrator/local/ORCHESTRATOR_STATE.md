@@ -25,7 +25,8 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 011 | .orchestrator/prompts/011-timeshift-guardian.md | timeshift-guardian: diagnose-first Timeshift guardian, one confirmed additive snapshot, elevated, no undo (additive policy) | arena/01a0b18d-mintbutler (pinned; substitution recorded) | #10 | Merged 2026-09-17 (merge commit a41bfb3, after revision 012) |
 | 012 | .orchestrator/prompts/012-revise-timeshift-guardian-sudo-display.md | REVISION of PR #10: helper-driven elevated-command display, no sudo literals in module.sh | arena/01a0b18d-mintbutler (continued) | #10 | Completed 2026-09-17 — fix verified; PR #10 merged a41bfb3 |
 | 013 | .orchestrator/prompts/013-audio-repair.md | audio-repair: diagnose-first sound doctor, honest newer-kernel verdict, one recorded undoable Master repair, elevated dmesg read | arena/01a0b1e6-mintbutler (pinned; substitution recorded in PR) | #11 | Merged 2026-09-17 (merge commit bb25037) |
-| 014 | .orchestrator/prompts/014-multimedia-codecs.md | multimedia-codecs: diagnose-first curated codec install, single elevated apt-get step, honest no-undo, order 40 | arena/01a0b3b3-mintbutler (pinned; substitution recorded in PR) | #12 | Reviewed 2026-09-17 — MERGE advised; awaiting operator merge |
+| 014 | .orchestrator/prompts/014-multimedia-codecs.md | multimedia-codecs: diagnose-first curated codec install, single elevated apt-get step, honest no-undo, order 40 | arena/01a0b3b3-mintbutler (pinned; substitution recorded in PR) | #12 | Merged 2026-09-17 (merge commit a2ecf27) |
+| 015 | .orchestrator/prompts/015-printer-helper.md | printer-helper: diagnose-first CUPS doctor + recorded default-printer repair, risk user, never vendor blobs, order 60 | — | — | Published + dispatched 2026-09-17 |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -52,7 +53,8 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] 010: appimage-installer — PR #8 (+#9) merged 2026-09-17 (d046064, b930e0b) before review; post-hoc gate 199/0 + deliverables 1:1
 - [x] 011: timeshift-guardian — PR #10 merged 2026-09-17 (a41bfb3) after revision 012
 - [x] 013: audio-repair — PR #11 merged 2026-09-17 (bb25037)
-- [~] 014: multimedia-codecs — PR #12 reviewed 2026-09-17, MERGE advised (battery 339/0, modulelint 7/7, manifest/tracker byte-exact, no sudo literals, undo:false menu affordance asserted); awaiting operator merge
+- [x] 014: multimedia-codecs — PR #12 merged 2026-09-17 (a2ecf27)
+- [~] 015: printer-helper — IN PROGRESS (build order 7; diagnose-first CUPS doctor, one recorded default-printer repair, zero elevation, never vendor blobs, order 60); prompt 015 published + dispatched
 - [ ] 014: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
 - [ ] 015: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
 - [ ] 016: system-report-pack (Pending — build order 8; order 70; additive report file, never installs inxi — plain-tool fallback)
@@ -194,3 +196,6 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | dispatch | 014 handed to operator; stub first line: mintbutler agent
 - 2026-09-17 | review | 014 / PR #12 — MERGE advised: diff = exactly the 4 deliverables; suite 339/0 (+62, stages (ax)-(bc)); modulelint 7/7 incl. PASS multimedia-codecs; --scan exit 0; --list badge ok; menu navigation asserts NO [u]ndo affordance (undo:false convention live-verified); plan 16 / dry-run 22 lines with no-undo notice; manifest byte-exact; tracker §4 byte-exact (task 015 printer-helper); zero sudo/pkexec/eval literals (module + all elevated siblings regression-checked); bash -n clean; live sandbox non-interactive run stops at ask_yn EOF → 'Nothing installed.' exit 0; honest mixed exit-1 path verified in code; Session Irregularities present (branch substitution disclosed)
 - 2026-09-17 | distillation | MERGE-verdict knowledge from 014: (a) undo:false convention = module omits the undo action + menu detail screen shows 'Undo: not available' with no [u]ndo key, assertable via scripted menu navigation; (b) ask_yn EOF=NO is the modulelint-sandbox safety gate for install-type modules — non-interactive run must end at the confirmation with zero writes
+- 2026-09-17 | refresh-main | owner reported PR #12 merged (a2ecf27); main refreshed, net diff = exactly PR #12 content
+- 2026-09-17 | publish | 015-printer-helper published (conforming form; stage letters (bd)-(bi); risk token to be confirmed by agent from existing user-level modules; zero-elevation invariant; tracker deliverable names task 016 system-report-pack)
+- 2026-09-17 | dispatch | 015 handed to operator; stub first line: mintbutler agent
