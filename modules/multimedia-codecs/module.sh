@@ -98,7 +98,61 @@ dry_run() {
 }
 
 run() {
-  printf 'run is not implemented yet (work in progress).\n' >&2
+  # (i) preflight — one plain honest line when the package tools are missing.
+  local missing_tools=""
+  if ! command -v dpkg >/dev/null 2>&1; then
+    missing_tools="dpkg"
+  fi
+  if ! command -v apt-get >/dev/null 2>&1; then
+    if [[ -n "${missing_tools}" ]]; then
+      missing_tools="${missing_tools}, apt-get"
+    else
+      missing_tools="apt-get"
+    fi
+  fi
+  if [[ -n "${missing_tools}" ]]; then
+    printf 'Package tools missing: %s — dpkg and apt-get ship on Mint; nothing was changed.\n' "${missing_tools}" >&2
+    exit 1
+  fi
+
+  printf 'Multimedia codec check — every step is read-only until you confirm the install.\n'
+
+  # (ii) read-only status: dpkg -s per curated package -> two lists.
+  local -a installed=() missing=()
+  local pkg
+  for pkg in "${CODEC_PACKAGES[@]}"; do
+    if dpkg -s "${pkg}" >/dev/null 2>&1; then
+      installed+=("${pkg}")
+    else
+      missing+=("${pkg}")
+    fi
+  done
+
+  # (iii) nothing missing -> honest verdict, no elevated call, no writes.
+  if [[ "${#missing[@]}" -eq 0 ]]; then
+    printf 'Verdict: all four curated codec packages are already installed; nothing to do.\n'
+    printf '  installed: %s\n' "$(join_comma "${installed[@]}")"
+    printf 'No elevated call was made and nothing was written.\n'
+    exit 0
+  fi
+
+  # (iv) show installed vs missing, the exact elevated command via the helper
+  # display, the honest no-undo notice, then the ONE confirmation.
+  if [[ "${#installed[@]}" -gt 0 ]]; then
+    printf '  installed: %s\n' "$(join_comma "${installed[@]}")"
+  else
+    printf '  installed: none of the curated packages\n'
+  fi
+  printf '  missing:   %s\n' "$(join_comma "${missing[@]}")"
+  local install_command="apt-get install -y ${missing[*]}"
+  printf '  the single elevated step would run: %s\n' "$(elevate_command_line "${install_command}")"
+  printf '  Notice: these installs are not undone by mintbutler; the removal command is printed after a successful install.\n'
+  if ! ask_yn "Install the missing codec packages now"; then
+    printf 'Nothing installed.\n'
+    exit 0
+  fi
+
+  printf 'Install step is not implemented yet (work in progress).\n' >&2
   exit 1
 }
 
