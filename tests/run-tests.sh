@@ -3747,6 +3747,712 @@ else
 fi
 
 
+# ---------------------------------------------------------------------------
+# Stages (bd)-(bi): printer-helper (user-level, diagnose-first) — stub-only
+# verification. Every stage runs with a controlled PATH (stub lpstat/lpinfo/
+# lpoptions plus symlinks to the coreutils the module needs) and a fake HOME
+# under mktemp. No stage ever invokes a real CUPS tool, and no stub ever
+# touches the real printing stack: the stub lpoptions only rewrites a stub
+# state file. Where the module's interactive confirmation matters, stages
+# drive the module binary directly with piped stdin (the menu path cannot
+# script a confirmation).
+# ---------------------------------------------------------------------------
+
+PH_MODULE="${REPO_ROOT}/modules/printer-helper/module.sh"
+PH_STUB_ROOT="${TMPBASE}/ph-stubs"
+PH_STATE_REL=".local/state/mintbutler/printer-helper/default.record"
+mkdir -p "${PH_STUB_ROOT}"
+
+# Controlled-PATH builder: symlink the coreutils the module (and the lib
+# helper it sources) needs from the host; each stage's bin dir then gets only
+# the stubs that stage wants present.
+ph_make_bin() {
+  local dir="${1:-}"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in dirname sed mkdir rm rmdir mv bash date tr grep cut awk timeout head wc cat; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  printf '%s\n' "${dir}"
+}
+
+# Stub lpstat: file-backed default printer. LPSTAT_STUB_STATE names a
+# default=<queue> / default=none file that the stub lpoptions rewrites.
+# LPSTAT_STUB_SCHED (running|down|fail) drives `lpstat -r`;
+# LPSTAT_STUB_QUEUES holds the canned `lpstat -p` lines (%-decoded, empty
+# means no queue at all). LPSTAT_STUB_LOG records every invocation.
+# Note on the case patterns: "$1 $2 $3" keeps the separators, so a one-arg
+# call reads "-r  " (two trailing spaces) and "-p -d " reads three args.
+cat <<'PH_LPSTAT_STUB' > "${PH_STUB_ROOT}/lpstat"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${LPSTAT_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'lpstat%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+STATE="${LPSTAT_STUB_STATE:?lpstat-stub: LPSTAT_STUB_STATE is not set}"
+cur=none
+if [[ -f "${STATE}" ]]; then
+  cur="$(sed -n 's/^default=//p' "${STATE}" | head -n 1)"
+fi
+case "${1:-} ${2:-} ${3:-}" in
+  "-r  ")
+    case "${LPSTAT_STUB_SCHED:-running}" in
+      down)
+        printf 'scheduler is not running\n'
+        ;;
+      fail)
+        exit 1
+        ;;
+      *)
+        printf 'scheduler is running\n'
+        ;;
+    esac
+    ;;
+  "-p -d ")
+    if [[ "${cur}" == "none" || -z "${cur}" ]]; then
+      printf 'no system default destination\n'
+    else
+      printf 'system default destination: %s\n' "${cur}"
+    fi
+    if [[ -n "${LPSTAT_STUB_QUEUES:-}" ]]; then
+      printf '%b\n' "${LPSTAT_STUB_QUEUES}"
+    fi
+    ;;
+  "-d  ")
+    if [[ "${cur}" == "none" || -z "${cur}" ]]; then
+      printf 'no system default destination\n'
+    else
+      printf 'system default destination: %s\n' "${cur}"
+    fi
+    ;;
+  *)
+    printf 'lpstat-stub: unsupported invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+PH_LPSTAT_STUB
+
+# Stub lpinfo: LPINFO_STUB_MODE (usb|many|empty|fail) drives the -v scan.
+cat <<'PH_LPINFO_STUB' > "${PH_STUB_ROOT}/lpinfo"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${LPINFO_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'lpinfo%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+if [[ "${1:-}" != "-v" ]]; then
+  printf 'lpinfo-stub: unsupported invocation: %s\n' "$*" >&2
+  exit 2
+fi
+case "${LPINFO_STUB_MODE:-usb}" in
+  usb)
+    printf 'direct usb://HP/OfficeJet%%205200%%20series?serial=CN123\n'
+    ;;
+  many)
+    printf 'direct usb://HP/OfficeJet%%205200%%20series?serial=CN123\n'
+    printf 'network ipps://BRW1234567890AB._ipps._tcp.local/\n'
+    printf 'network socket://192.168.1.20\n'
+    printf 'network lpd://192.168.1.21/L1\n'
+    ;;
+  empty)
+    :
+    ;;
+  fail)
+    printf 'lpinfo-stub: scan refused\n' >&2
+    exit 1
+    ;;
+  *)
+    printf 'lpinfo-stub: unsupported mode: %s\n' "${LPINFO_STUB_MODE}" >&2
+    exit 2
+    ;;
+esac
+PH_LPINFO_STUB
+
+# Stub lpoptions: logs every call to LPOPTIONS_STUB_LOG, then rewrites the
+# stub state file — `lpoptions -d <queue>` records default=<queue>,
+# `lpoptions -x` records default=none. LPOPTIONS_STUB_FAIL=1 makes -d fail.
+# It never touches anything outside the stub state file.
+cat <<'PH_LPOPTIONS_STUB' > "${PH_STUB_ROOT}/lpoptions"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${LPOPTIONS_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'lpoptions%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+STATE="${LPSTAT_STUB_STATE:?lpoptions-stub: LPSTAT_STUB_STATE is not set}"
+if [[ "${1:-}" == "-d" && -n "${2:-}" ]]; then
+  if [[ "${LPOPTIONS_STUB_FAIL:-0}" == "1" ]]; then
+    printf 'lpoptions-stub: refused\n' >&2
+    exit 1
+  fi
+  printf 'default=%s\n' "${2}" > "${STATE}"
+  exit 0
+fi
+if [[ "${1:-}" == "-x" ]]; then
+  printf 'default=none\n' > "${STATE}"
+  exit 0
+fi
+printf 'lpoptions-stub: unsupported invocation: %s\n' "$*" >&2
+exit 2
+PH_LPOPTIONS_STUB
+
+chmod +x "${PH_STUB_ROOT}/lpstat" "${PH_STUB_ROOT}/lpinfo" "${PH_STUB_ROOT}/lpoptions"
+
+# Bin dir with only coreutils: no lpstat/lpinfo/lpoptions at all — the
+# preflight path every lint sandbox takes.
+PH_BIN_EMPTY="${PH_STUB_ROOT}/bin-empty"
+ph_make_bin "${PH_BIN_EMPTY}" >/dev/null
+
+# Bin dir for every diagnosis path: all three stub tools present.
+PH_BIN_MAIN="${PH_STUB_ROOT}/bin-main"
+ph_make_bin "${PH_BIN_MAIN}" >/dev/null
+cp "${PH_STUB_ROOT}/lpstat" "${PH_STUB_ROOT}/lpinfo" "${PH_STUB_ROOT}/lpoptions" "${PH_BIN_MAIN}/"
+
+# One idle, enabled queue — the healthy fixture used across the stages.
+PH_QUEUE_IDLE='printer OfficeJet-5200 is idle.  enabled since Thu 18 Sep 2025 10:00:00 AM'
+
+# Stage (bd): gate + read-only smokes.
+printf 'Stage bd: printer-helper gate, scan, list, plan/dry-run, missing preflight\n'
+
+output_bd_scan=""
+code_bd_scan="0"
+output_bd_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_bd_scan="$?"
+if [[ "${code_bd_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with printer-helper present (got ${code_bd_scan})"
+else
+  pass "butler --scan exits 0 with printer-helper present"
+fi
+if printf '%s\n' "${output_bd_scan}" | grep -q "PASS printer-helper"; then
+  pass "butler --scan reports PASS printer-helper"
+else
+  fail "butler --scan reports PASS printer-helper"
+fi
+
+output_bd_lint1=""
+code_bd_lint1="0"
+output_bd_lint1="$(cd "${REPO_ROOT}" && bin/modulelint printer-helper 2>&1)" || code_bd_lint1="$?"
+if [[ "${code_bd_lint1}" -ne 0 ]]; then
+  fail "bin/modulelint printer-helper exits 0 (got ${code_bd_lint1})"
+else
+  pass "bin/modulelint printer-helper exits 0"
+fi
+if printf '%s\n' "${output_bd_lint1}" | grep -q "PASS printer-helper"; then
+  pass "bin/modulelint reports PASS printer-helper"
+else
+  fail "bin/modulelint reports PASS printer-helper"
+fi
+
+output_bd_lint=""
+code_bd_lint="0"
+output_bd_lint="$(cd "${REPO_ROOT}" && bin/modulelint 2>&1)" || code_bd_lint="$?"
+if [[ "${code_bd_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 over all modules with printer-helper present (got ${code_bd_lint})"
+else
+  pass "bin/modulelint exits 0 over all modules with printer-helper present"
+fi
+
+output_bd_list=""
+code_bd_list="0"
+output_bd_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_bd_list="$?"
+if [[ "${code_bd_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_bd_list})"
+else
+  pass "butler --list exits 0"
+fi
+ph_bd_list_line="$(printf '%s\n' "${output_bd_list}" | grep -- "printer-helper: Printer helper" || true)"
+if [[ -n "${ph_bd_list_line}" ]]; then
+  pass "butler --list shows printer-helper: Printer helper"
+else
+  fail "butler --list shows printer-helper: Printer helper"
+fi
+if [[ "${ph_bd_list_line}" == *"⚠ elevated"* ]]; then
+  fail "butler --list shows NO elevated badge on printer-helper"
+else
+  pass "butler --list shows NO elevated badge on printer-helper"
+fi
+if printf '%s\n' "${output_bd_list}" | grep -q "multimedia-codecs" \
+  && printf '%s\n' "${output_bd_list}" | grep -q "audio-repair" \
+  && printf '%s\n' "${output_bd_list}" | grep -q "desktop-shortcut-creator"; then
+  pass "butler --list still shows the earlier modules"
+else
+  fail "butler --list still shows the earlier modules"
+fi
+
+# Menu position smoke: with the current module set, order 60 renders as
+# entry 6 on page 1 (positions are recomputed at scan time), and a
+# user-level module carries no elevated badge.
+output_bd_menu=""
+code_bd_menu="0"
+output_bd_menu="$(printf 'q\n' | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || code_bd_menu="$?"
+ph_bd_menu_line="$(printf '%s\n' "${output_bd_menu}" | grep -F "6) Printer helper" || true)"
+if [[ "${code_bd_menu}" -eq 0 && -n "${ph_bd_menu_line}" && "${ph_bd_menu_line}" != *"⚠ elevated"* ]]; then
+  pass "menu renders Printer helper at its order-60 position without an elevated badge"
+else
+  fail "menu renders Printer helper at its order-60 position without an elevated badge (got ${code_bd_menu}: ${ph_bd_menu_line})"
+fi
+
+PH_BD_HOME="${TMPBASE}/ph-home-bd"
+PH_BD_HOME_BEFORE="${TMPBASE}/ph-home-bd-before"
+mkdir -p "${PH_BD_HOME}"
+cp -a "${PH_BD_HOME}" "${PH_BD_HOME_BEFORE}"
+
+output_bd_plan=""
+code_bd_plan="0"
+output_bd_plan="$(HOME="${PH_BD_HOME}" XDG_STATE_HOME= bash "${PH_MODULE}" plan < /dev/null 2>&1)" || code_bd_plan="$?"
+ph_bd_plan_lines="$(printf '%s\n' "${output_bd_plan}" | grep -c . || true)"
+if [[ "${code_bd_plan}" -eq 0 && -n "${output_bd_plan}" ]]; then
+  pass "printer-helper plan exits 0 and non-empty"
+else
+  fail "printer-helper plan exits 0 and non-empty (got ${code_bd_plan})"
+fi
+if [[ "${ph_bd_plan_lines}" -le 23 ]]; then
+  pass "printer-helper plan renders in <= 23 lines (got ${ph_bd_plan_lines})"
+else
+  fail "printer-helper plan renders in <= 23 lines (got ${ph_bd_plan_lines})"
+fi
+
+output_bd_dry=""
+code_bd_dry="0"
+output_bd_dry="$(HOME="${PH_BD_HOME}" XDG_STATE_HOME= bash "${PH_MODULE}" dry-run < /dev/null 2>&1)" || code_bd_dry="$?"
+ph_bd_dry_lines="$(printf '%s\n' "${output_bd_dry}" | grep -c . || true)"
+if [[ "${code_bd_dry}" -eq 0 && -n "${output_bd_dry}" ]]; then
+  pass "printer-helper dry-run exits 0 and non-empty"
+else
+  fail "printer-helper dry-run exits 0 and non-empty (got ${code_bd_dry})"
+fi
+if [[ "${ph_bd_dry_lines}" -le 23 ]]; then
+  pass "printer-helper dry-run renders in <= 23 lines (got ${ph_bd_dry_lines})"
+else
+  fail "printer-helper dry-run renders in <= 23 lines (got ${ph_bd_dry_lines})"
+fi
+if printf '%s\n' "${output_bd_dry}" | grep -Fq "lpstat -r"; then
+  pass "printer-helper dry-run contains the exact string 'lpstat -r'"
+else
+  fail "printer-helper dry-run contains the exact string 'lpstat -r'"
+fi
+if printf '%s\n' "${output_bd_dry}" | grep -Fq "lpoptions -d"; then
+  pass "printer-helper dry-run contains the exact string 'lpoptions -d'"
+else
+  fail "printer-helper dry-run contains the exact string 'lpoptions -d'"
+fi
+if diff -r "${PH_BD_HOME}" "${PH_BD_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "printer-helper plan and dry-run write nothing to the fake HOME"
+else
+  fail "printer-helper plan and dry-run modified the fake HOME"
+fi
+
+# Menu-flag smoke (owner acceptance command): --run <slug> --dry-run is
+# non-destructive.
+code_bd_menudry="0"
+HOME="${PH_BD_HOME}" XDG_STATE_HOME= bash -c 'cd "'"${REPO_ROOT}"'" && ./butler --run printer-helper --dry-run' >/dev/null 2>&1 || code_bd_menudry="$?"
+if [[ "${code_bd_menudry}" -eq 0 ]]; then
+  pass "butler --run printer-helper --dry-run exits 0"
+else
+  fail "butler --run printer-helper --dry-run exits 0 (got ${code_bd_menudry})"
+fi
+if diff -r "${PH_BD_HOME}" "${PH_BD_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "butler --run printer-helper --dry-run leaves the fake HOME untouched"
+else
+  fail "butler --run printer-helper --dry-run modified the fake HOME"
+fi
+
+# Missing-tools preflight (modulelint compatibility): stdin /dev/null and no
+# lp* tool on PATH -> exit 1, one plain stderr line, fake HOME unchanged.
+PH_BD2_HOME="${TMPBASE}/ph-home-bd2"
+PH_BD2_HOME_BEFORE="${TMPBASE}/ph-home-bd2-before"
+PH_BD2_STDERR="${TMPBASE}/ph-bd2.stderr"
+mkdir -p "${PH_BD2_HOME}"
+cp -a "${PH_BD2_HOME}" "${PH_BD2_HOME_BEFORE}"
+code_bd_run="0"
+PATH="${PH_BIN_EMPTY}" HOME="${PH_BD2_HOME}" XDG_STATE_HOME= \
+  bash "${PH_MODULE}" run < /dev/null >/dev/null 2>"${PH_BD2_STDERR}" || code_bd_run="$?"
+if [[ "${code_bd_run}" -eq 1 ]]; then
+  pass "printer-helper missing-tools preflight exits 1 (got ${code_bd_run})"
+else
+  fail "printer-helper missing-tools preflight exits 1 (got ${code_bd_run})"
+fi
+bd2_stderr_lines="$(grep -c . "${PH_BD2_STDERR}" || true)"
+if [[ "${bd2_stderr_lines}" -eq 1 ]] && grep -q "Printing tools missing" "${PH_BD2_STDERR}"; then
+  pass "printer-helper missing-tools preflight prints one plain stderr line"
+else
+  fail "printer-helper missing-tools preflight prints one plain stderr line (got ${bd2_stderr_lines}: $(cat "${PH_BD2_STDERR}"))"
+fi
+if diff -r "${PH_BD2_HOME}" "${PH_BD2_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "printer-helper missing-tools preflight writes nothing to the fake HOME"
+else
+  fail "printer-helper missing-tools preflight modified the fake HOME"
+fi
+
+# Zero-elevation source assertions: no sudo/pkexec literal anywhere
+# (display strings included) and no lib/elevate.sh sourcing.
+if grep -w -E -q 'sudo|pkexec' "${PH_MODULE}"; then
+  fail "printer-helper source contains no sudo/pkexec literal"
+else
+  pass "printer-helper source contains no sudo/pkexec literal"
+fi
+if grep -F -q 'source "${LIB_DIR}/elevate.sh"' "${PH_MODULE}"; then
+  fail "printer-helper never sources lib/elevate.sh"
+else
+  pass "printer-helper never sources lib/elevate.sh"
+fi
+
+# Stage (be): healthy chain — scheduler running, one idle queue, the default
+# already pointing at it, one USB device on the scan.
+printf 'Stage be: printer-helper healthy chain\n'
+PH_BE_HOME="${TMPBASE}/ph-home-be"
+PH_BE_HOME_BEFORE="${TMPBASE}/ph-home-be-before"
+PH_BE_STATE="${TMPBASE}/ph-be-default.txt"
+mkdir -p "${PH_BE_HOME}"
+cp -a "${PH_BE_HOME}" "${PH_BE_HOME_BEFORE}"
+printf 'default=OfficeJet-5200\n' > "${PH_BE_STATE}"
+BE_OPT="${TMPBASE}/ph-be-lpoptions.log"
+output_be=""
+code_be="0"
+output_be="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BE_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BE_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
+  LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BE_OPT}" \
+  bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_be="$?"
+if [[ "${code_be}" -eq 0 ]]; then
+  pass "printer-helper healthy chain exits 0"
+else
+  fail "printer-helper healthy chain exits 0 (got ${code_be})"
+fi
+if printf '%s\n' "${output_be}" | grep -q "the printing stack looks healthy"; then
+  pass "printer-helper healthy chain verdict says the printing stack looks healthy"
+else
+  fail "printer-helper healthy chain verdict says the printing stack looks healthy"
+fi
+if printf '%s\n' "${output_be}" | grep -q "Device scan: 1 device(s) reported" \
+  && printf '%s\n' "${output_be}" | grep -q "usb://HP/OfficeJet"; then
+  pass "printer-helper healthy chain shows the device summary"
+else
+  fail "printer-helper healthy chain shows the device summary"
+fi
+if [[ ! -e "${PH_BE_HOME}/${PH_STATE_REL}" ]]; then
+  pass "printer-helper healthy chain writes no state file"
+else
+  fail "printer-helper healthy chain writes no state file"
+fi
+if printf '%s\n' "${output_be}" | grep -Fq "[y/N]"; then
+  fail "printer-helper healthy chain asks no question"
+else
+  pass "printer-helper healthy chain asks no question"
+fi
+if [[ ! -e "${BE_OPT}" ]]; then
+  pass "printer-helper healthy chain never calls lpoptions"
+else
+  fail "printer-helper healthy chain never calls lpoptions"
+fi
+if diff -r "${PH_BE_HOME}" "${PH_BE_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "printer-helper healthy chain writes nothing to the fake HOME"
+else
+  fail "printer-helper healthy chain modified the fake HOME"
+fi
+
+# Stage (bf): scheduler down — both the "not running" reply and a failing
+# lpstat -r exit 0 with the honest verdict and nothing written.
+printf 'Stage bf: printer-helper scheduler-down verdict\n'
+PH_BF_HOME="${TMPBASE}/ph-home-bf"
+PH_BF_HOME_BEFORE="${TMPBASE}/ph-home-bf-before"
+PH_BF_STATE="${TMPBASE}/ph-bf-default.txt"
+mkdir -p "${PH_BF_HOME}"
+cp -a "${PH_BF_HOME}" "${PH_BF_HOME_BEFORE}"
+printf 'default=none\n' > "${PH_BF_STATE}"
+output_bf=""
+code_bf="0"
+output_bf="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BF_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BF_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
+  LPSTAT_STUB_SCHED=down LPOPTIONS_STUB_LOG="${TMPBASE}/ph-bf-lpoptions.log" \
+  bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_bf="$?"
+if [[ "${code_bf}" -eq 0 ]]; then
+  pass "printer-helper scheduler-down exits 0 (verdict delivered)"
+else
+  fail "printer-helper scheduler-down exits 0 (got ${code_bf})"
+fi
+if printf '%s\n' "${output_bf}" | grep -q "the CUPS printing service is not running"; then
+  pass "printer-helper scheduler-down verdict names the CUPS printing service"
+else
+  fail "printer-helper scheduler-down verdict names the CUPS printing service"
+fi
+if printf '%s\n' "${output_bf}" | grep -q "Printers settings" \
+  && printf '%s\n' "${output_bf}" | grep -qi "reboot"; then
+  pass "printer-helper scheduler-down guidance names Printers settings and a reboot"
+else
+  fail "printer-helper scheduler-down guidance names Printers settings and a reboot"
+fi
+if [[ ! -e "${PH_BF_HOME}/${PH_STATE_REL}" ]]; then
+  pass "printer-helper scheduler-down writes no state file"
+else
+  fail "printer-helper scheduler-down writes no state file"
+fi
+if diff -r "${PH_BF_HOME}" "${PH_BF_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "printer-helper scheduler-down writes nothing to the fake HOME"
+else
+  fail "printer-helper scheduler-down modified the fake HOME"
+fi
+output_bf2=""
+code_bf2="0"
+output_bf2="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BF_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BF_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
+  LPSTAT_STUB_SCHED=fail \
+  bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_bf2="$?"
+if [[ "${code_bf2}" -eq 0 ]] \
+  && printf '%s\n' "${output_bf2}" | grep -q "the CUPS printing service is not running"; then
+  pass "printer-helper reports the same verdict when lpstat -r fails outright"
+else
+  fail "printer-helper reports the same verdict when lpstat -r fails outright (got ${code_bf2})"
+fi
+
+# Stage (bg): no queues at all -> guided setup, never vendor blobs.
+printf 'Stage bg: printer-helper no-queue guided setup\n'
+PH_BG_HOME="${TMPBASE}/ph-home-bg"
+PH_BG_HOME_BEFORE="${TMPBASE}/ph-home-bg-before"
+PH_BG_STATE="${TMPBASE}/ph-bg-default.txt"
+mkdir -p "${PH_BG_HOME}"
+cp -a "${PH_BG_HOME}" "${PH_BG_HOME_BEFORE}"
+printf 'default=none\n' > "${PH_BG_STATE}"
+output_bg=""
+code_bg="0"
+output_bg="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BG_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BG_STATE}" LPSTAT_STUB_QUEUES= \
+  LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${TMPBASE}/ph-bg-lpoptions.log" \
+  bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_bg="$?"
+if [[ "${code_bg}" -eq 0 ]]; then
+  pass "printer-helper no-queue path exits 0"
+else
+  fail "printer-helper no-queue path exits 0 (got ${code_bg})"
+fi
+if printf '%s\n' "${output_bg}" | grep -q "Printers settings"; then
+  pass "printer-helper no-queue verdict names Mint's Printers settings app"
+else
+  fail "printer-helper no-queue verdict names Mint's Printers settings app"
+fi
+if printf '%s\n' "${output_bg}" | grep -q "localhost:631"; then
+  pass "printer-helper no-queue verdict names the CUPS web interface at localhost:631"
+else
+  fail "printer-helper no-queue verdict names the CUPS web interface at localhost:631"
+fi
+if printf '%s\n' "${output_bg}" | grep -q "IPP Everywhere"; then
+  pass "printer-helper no-queue verdict names driverless IPP Everywhere"
+else
+  fail "printer-helper no-queue verdict names driverless IPP Everywhere"
+fi
+if printf '%s\n' "${output_bg}" | grep -q "never downloads, recommends, or installs vendor drivers or blobs"; then
+  pass "printer-helper no-queue verdict contains the never-vendor-blobs statement"
+else
+  fail "printer-helper no-queue verdict contains the never-vendor-blobs statement"
+fi
+if [[ ! -e "${PH_BG_HOME}/${PH_STATE_REL}" ]]; then
+  pass "printer-helper no-queue path writes no state file"
+else
+  fail "printer-helper no-queue path writes no state file"
+fi
+if diff -r "${PH_BG_HOME}" "${PH_BG_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "printer-helper no-queue path writes nothing to the fake HOME"
+else
+  fail "printer-helper no-queue path modified the fake HOME"
+fi
+
+# Stage (bh): default repair + undo. One idle queue and NO default; scripted
+# stdin 'y' accepts the repair, then undo restores "no default" again.
+printf 'Stage bh: printer-helper default repair and undo\n'
+PH_BH_HOME="${TMPBASE}/ph-home-bh"
+PH_BH_STATE="${TMPBASE}/ph-bh-default.txt"
+mkdir -p "${PH_BH_HOME}"
+printf 'default=none\n' > "${PH_BH_STATE}"
+BH_OPT="${TMPBASE}/ph-bh-lpoptions.log"
+output_bh=""
+code_bh="0"
+output_bh="$(printf 'y\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BH_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
+  LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BH_OPT}" \
+  bash "${PH_MODULE}" run 2>&1)" || code_bh="$?"
+if [[ "${code_bh}" -eq 0 ]]; then
+  pass "printer-helper default repair exits 0"
+else
+  fail "printer-helper default repair exits 0 (got ${code_bh})"
+fi
+if printf '%s\n' "${output_bh}" | grep -q "current:" \
+  && printf '%s\n' "${output_bh}" | grep -q "proposed:"; then
+  pass "printer-helper repair offer shows current-vs-proposed before confirming"
+else
+  fail "printer-helper repair offer shows current-vs-proposed before confirming"
+fi
+PH_BH_RECORD="${PH_BH_HOME}/${PH_STATE_REL}"
+if [[ -f "${PH_BH_RECORD}" ]] && grep -q "^prev_default=none$" "${PH_BH_RECORD}"; then
+  pass "printer-helper repair records prev_default=none before applying"
+else
+  fail "printer-helper repair records prev_default=none before applying"
+fi
+bh_apply_calls="$(grep -c '^lpoptions -d OfficeJet-5200$' "${BH_OPT}" || true)"
+if [[ "${bh_apply_calls}" -eq 1 ]]; then
+  pass "printer-helper repair calls lpoptions -d <queue> exactly once"
+else
+  fail "printer-helper repair calls lpoptions -d <queue> exactly once (got ${bh_apply_calls})"
+fi
+if grep -q "^default=OfficeJet-5200$" "${PH_BH_STATE}"; then
+  pass "printer-helper repair leaves the stub stack pointing at the new default"
+else
+  fail "printer-helper repair leaves the stub stack pointing at the new default"
+fi
+if printf '%s\n' "${output_bh}" | grep -qi "undo"; then
+  pass "printer-helper repair output points at undo for the recorded default"
+else
+  fail "printer-helper repair output points at undo for the recorded default"
+fi
+
+output_bhu=""
+code_bhu="0"
+output_bhu="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BH_STATE}" LPOPTIONS_STUB_LOG="${BH_OPT}" \
+  bash "${PH_MODULE}" undo < /dev/null 2>&1)" || code_bhu="$?"
+if [[ "${code_bhu}" -eq 0 ]]; then
+  pass "printer-helper undo exits 0"
+else
+  fail "printer-helper undo exits 0 (got ${code_bhu})"
+fi
+bh_undo_calls="$(grep -c '^lpoptions -x$' "${BH_OPT}" || true)"
+if [[ "${bh_undo_calls}" -eq 1 ]]; then
+  pass "printer-helper undo calls lpoptions -x for a prev_default=none record"
+else
+  fail "printer-helper undo calls lpoptions -x for a prev_default=none record (got ${bh_undo_calls})"
+fi
+if grep -q "^default=none$" "${PH_BH_STATE}"; then
+  pass "printer-helper undo restores no-default state in the stub stack"
+else
+  fail "printer-helper undo restores no-default state in the stub stack"
+fi
+if [[ ! -e "${PH_BH_RECORD}" ]]; then
+  pass "printer-helper undo deletes the state record"
+else
+  fail "printer-helper undo deletes the state record"
+fi
+if printf '%s\n' "${output_bhu}" | grep -q "never needed undoing"; then
+  pass "printer-helper undo states the diagnosis steps never needed undoing"
+else
+  fail "printer-helper undo states the diagnosis steps never needed undoing"
+fi
+output_bhu2=""
+code_bhu2="0"
+output_bhu2="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BH_STATE}" \
+  bash "${PH_MODULE}" undo < /dev/null 2>&1)" || code_bhu2="$?"
+if [[ "${code_bhu2}" -eq 0 ]] && printf '%s\n' "${output_bhu2}" | grep -q "Nothing to undo."; then
+  pass "printer-helper second undo reports Nothing to undo and exits 0"
+else
+  fail "printer-helper second undo reports Nothing to undo and exits 0 (got ${code_bhu2})"
+fi
+
+# Undo with lpoptions missing: honest refusal, one plain stderr line, and
+# the record is kept so nothing is silently lost.
+PH_BH2_HOME="${TMPBASE}/ph-home-bh2"
+PH_BH2_STDERR="${TMPBASE}/ph-bh2.stderr"
+mkdir -p "${PH_BH2_HOME}/.local/state/mintbutler/printer-helper"
+printf 'prev_default=none\n' > "${PH_BH2_HOME}/${PH_STATE_REL}"
+code_bh2="0"
+PATH="${PH_BIN_EMPTY}" HOME="${PH_BH2_HOME}" XDG_STATE_HOME= \
+  bash "${PH_MODULE}" undo < /dev/null >/dev/null 2>"${PH_BH2_STDERR}" || code_bh2="$?"
+bh2_stderr_lines="$(grep -c . "${PH_BH2_STDERR}" || true)"
+if [[ "${code_bh2}" -eq 1 && "${bh2_stderr_lines}" -eq 1 ]] \
+  && grep -q "Cannot undo" "${PH_BH2_STDERR}"; then
+  pass "printer-helper undo without lpoptions refuses honestly with one stderr line"
+else
+  fail "printer-helper undo without lpoptions refuses honestly with one stderr line (got ${code_bh2}/${bh2_stderr_lines}: $(cat "${PH_BH2_STDERR}"))"
+fi
+if [[ -f "${PH_BH2_HOME}/${PH_STATE_REL}" ]]; then
+  pass "printer-helper undo without lpoptions keeps the record"
+else
+  fail "printer-helper undo without lpoptions keeps the record"
+fi
+
+# Stage (bi): confirm-no, and the apply-failure path with a stub lpoptions
+# that refuses -d.
+printf 'Stage bi: printer-helper confirm-no and apply failure\n'
+PH_BI_HOME="${TMPBASE}/ph-home-bi"
+PH_BI_HOME_BEFORE="${TMPBASE}/ph-home-bi-before"
+PH_BI_STATE="${TMPBASE}/ph-bi-default.txt"
+mkdir -p "${PH_BI_HOME}"
+cp -a "${PH_BI_HOME}" "${PH_BI_HOME_BEFORE}"
+printf 'default=none\n' > "${PH_BI_STATE}"
+BI_OPT="${TMPBASE}/ph-bi-lpoptions.log"
+output_bi=""
+code_bi="0"
+output_bi="$(printf 'n\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BI_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BI_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
+  LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BI_OPT}" \
+  bash "${PH_MODULE}" run 2>&1)" || code_bi="$?"
+if [[ "${code_bi}" -eq 0 ]]; then
+  pass "printer-helper confirm-no exits 0"
+else
+  fail "printer-helper confirm-no exits 0 (got ${code_bi})"
+fi
+if printf '%s\n' "${output_bi}" | grep -q "Nothing changed."; then
+  pass "printer-helper confirm-no prints Nothing changed."
+else
+  fail "printer-helper confirm-no prints Nothing changed."
+fi
+if [[ ! -e "${BI_OPT}" ]]; then
+  pass "printer-helper confirm-no never calls lpoptions"
+else
+  fail "printer-helper confirm-no never calls lpoptions"
+fi
+if [[ ! -e "${PH_BI_HOME}/${PH_STATE_REL}" ]]; then
+  pass "printer-helper confirm-no writes no state"
+else
+  fail "printer-helper confirm-no writes no state"
+fi
+if diff -r "${PH_BI_HOME}" "${PH_BI_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "printer-helper confirm-no writes nothing to the fake HOME"
+else
+  fail "printer-helper confirm-no modified the fake HOME"
+fi
+
+PH_BI2_HOME="${TMPBASE}/ph-home-bi2"
+PH_BI2_STATE="${TMPBASE}/ph-bi2-default.txt"
+PH_BI2_STDERR="${TMPBASE}/ph-bi2.stderr"
+PH_BI2_STDOUT="${TMPBASE}/ph-bi2.stdout"
+mkdir -p "${PH_BI2_HOME}"
+printf 'default=none\n' > "${PH_BI2_STATE}"
+code_bi2="0"
+printf 'y\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BI2_HOME}" XDG_STATE_HOME= \
+  LPSTAT_STUB_STATE="${PH_BI2_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
+  LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${TMPBASE}/ph-bi2-lpoptions.log" \
+  LPOPTIONS_STUB_FAIL=1 \
+  bash "${PH_MODULE}" run > "${PH_BI2_STDOUT}" 2> "${PH_BI2_STDERR}" || code_bi2="$?"
+if [[ "${code_bi2}" -ne 0 ]]; then
+  pass "printer-helper apply-failure exits non-zero (got ${code_bi2})"
+else
+  fail "printer-helper apply-failure exits non-zero"
+fi
+# The ask_yn prompt shares the first stderr line with the stub refusal;
+# filter both to count the module's own lines.
+bi2_module_lines="$(grep -v 'Point the default printer at' "${PH_BI2_STDERR}" | grep -v 'lpoptions-stub:' | grep -c . || true)"
+if [[ "${bi2_module_lines}" -eq 1 ]]; then
+  pass "printer-helper apply-failure prints one plain stderr line"
+else
+  fail "printer-helper apply-failure prints one plain stderr line (got ${bi2_module_lines}: $(cat "${PH_BI2_STDERR}"))"
+fi
+if [[ ! -e "${PH_BI2_HOME}/${PH_STATE_REL}" ]]; then
+  pass "printer-helper apply-failure leaves no state file behind"
+else
+  fail "printer-helper apply-failure leaves no state file behind"
+fi
+if ! grep -q "Default printer is now" "${PH_BI2_STDOUT}"; then
+  pass "printer-helper apply-failure claims no result on stdout"
+else
+  fail "printer-helper apply-failure claims no result on stdout"
+fi
+if grep -q "^default=none$" "${PH_BI2_STATE}"; then
+  pass "printer-helper apply-failure leaves the stub default untouched"
+else
+  fail "printer-helper apply-failure leaves the stub default untouched"
+fi
+
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
