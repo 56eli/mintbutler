@@ -1,0 +1,12 @@
+title: System report pack
+description: >-
+  Prints a clean, copy-pasteable snapshot of this machine — distro, kernel,
+  hostname, uptime, CPU model and load, memory, disk usage of /, and session
+  type — gathered only from tools a stock Mint ships and written nowhere.
+  Installs nothing, never inxi; there is nothing to undo because nothing is
+  ever changed.
+risk: low
+undo: false
+needs: [df, free, uname, uptime]
+asks: 0
+order: 70
