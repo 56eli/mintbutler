@@ -3092,6 +3092,661 @@ else
 fi
 
 
+# ---------------------------------------------------------------------------
+# Stages (ax)-(bc): multimedia-codecs (elevated, honest no-undo) — stub-only
+# verification. Every stage runs with a controlled PATH (stub dpkg, apt-get,
+# and sudo plus symlinks to the coreutils the module needs) and a fake HOME
+# under mktemp. No stage ever invokes real dpkg, real apt-get, or real sudo:
+# the stub apt-get only appends package names to the stub dpkg state file
+# (it NEVER performs a real install or removal), and the elevated path goes
+# through a stub sudo that runs its command (stage (bc) uses a refusing sudo
+# instead). Where the module's interactive confirmation matters, stages
+# drive the module binary directly with piped stdin (the menu path cannot
+# script elevated confirmation). Note: with scripted stdin, the ask prompt
+# (stderr, no trailing newline) shares its line with whatever stderr writes
+# next — assertions account for that.
+# ---------------------------------------------------------------------------
+
+MC_MODULE="${REPO_ROOT}/modules/multimedia-codecs/module.sh"
+MC_STUB_ROOT="${TMPBASE}/mc-stubs"
+MC_PKG_BAD="gstreamer1.0-plugins-bad"
+MC_PKG_UGLY="gstreamer1.0-plugins-ugly"
+MC_PKG_LIBAV="gstreamer1.0-libav"
+MC_PKG_EXTRA="libavcodec-extra"
+mkdir -p "${MC_STUB_ROOT}"
+
+# Controlled-PATH builder: symlink the coreutils the module (and the lib
+# helpers it sources) needs from the host; each stage's bin dir then gets
+# only the stubs that stage wants present.
+mc_make_bin() {
+  local dir="${1:-}"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in dirname sed mkdir rm rmdir mv bash date tr grep cut awk; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  printf '%s\n' "${dir}"
+}
+
+# Stub dpkg: file-backed package database. DPKG_STUB_STATE names a file
+# holding one installed package name per line; `dpkg -s <pkg>` exits 0 with
+# a canned status block when <pkg> is listed, and exits 1 like a real dpkg
+# for a package that is not installed. DPKG_STUB_LOG (when set) records
+# every invocation. Read-only: the stub never modifies the state file.
+cat <<'MC_DPKG_STUB' > "${MC_STUB_ROOT}/dpkg"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${DPKG_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'dpkg%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+if [[ "${1:-}" != "-s" || -z "${2:-}" ]]; then
+  printf 'dpkg-stub: unsupported invocation: %s\n' "$*" >&2
+  exit 2
+fi
+pkg="${2}"
+STATE="${DPKG_STUB_STATE:-}"
+if [[ -n "${STATE}" && -f "${STATE}" ]]; then
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ "${line}" == "${pkg}" ]]; then
+      printf 'Package: %s\n' "${pkg}"
+      printf 'Status: install ok installed\n'
+      exit 0
+    fi
+  done < "${STATE}"
+fi
+printf "dpkg-query: package '%s' is not installed\n" "${pkg}" >&2
+exit 1
+MC_DPKG_STUB
+
+# Stub apt-get: logs every invocation to APTGET_STUB_LOG, then handles
+# `install -y <pkgs...>` by appending each package name to DPKG_STUB_STATE
+# — except packages named in APTGET_STUB_SKIP (space-separated), which stay
+# missing so the module's honest mixed path can be exercised. It NEVER
+# performs a real install or removal; it only edits the stub state file.
+cat <<'MC_APTGET_STUB' > "${MC_STUB_ROOT}/apt-get"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${APTGET_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'apt-get%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+if [[ "${1:-}" != "install" || "${2:-}" != "-y" ]]; then
+  printf 'apt-get-stub: unsupported invocation: %s\n' "$*" >&2
+  exit 2
+fi
+STATE="${DPKG_STUB_STATE:?apt-get-stub: DPKG_STUB_STATE is not set}"
+shift 2
+read -r -a skip_list <<< "${APTGET_STUB_SKIP:-}"
+for pkg in "$@"; do
+  skip="0"
+  for s in "${skip_list[@]}"; do
+    if [[ "${pkg}" == "${s}" ]]; then
+      skip="1"
+    fi
+  done
+  if [[ "${skip}" == "1" ]]; then
+    continue
+  fi
+  printf '%s\n' "${pkg}" >> "${STATE}"
+done
+exit "${APTGET_STUB_EXIT:-0}"
+MC_APTGET_STUB
+
+# Stub sudo (passthrough): logs to ELEVATED_STUB_LOG, then runs its command
+# — the install path executes the stub apt-get through this, mirroring the
+# real elevate flow without any privilege.
+cat <<'MC_SUDO_PASS_STUB' > "${MC_STUB_ROOT}/sudo-pass"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${ELEVATED_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'sudo%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+exec "$@"
+MC_SUDO_PASS_STUB
+
+# Stub sudo (refusing): one stderr line and a non-zero exit, like a sudo
+# that cannot authenticate with stdin closed.
+cat <<'MC_SUDO_REFUSE_STUB' > "${MC_STUB_ROOT}/sudo-refuse"
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sudo-stub: refused %s\n' "$*" >&2
+exit 1
+MC_SUDO_REFUSE_STUB
+
+chmod +x "${MC_STUB_ROOT}/dpkg" "${MC_STUB_ROOT}/apt-get" \
+  "${MC_STUB_ROOT}/sudo-pass" "${MC_STUB_ROOT}/sudo-refuse"
+
+# Bin dir for the passing paths: stub dpkg + stub apt-get + passthrough sudo.
+MC_BIN_PASS="${MC_STUB_ROOT}/bin-pass"
+mc_make_bin "${MC_BIN_PASS}" >/dev/null
+cp "${MC_STUB_ROOT}/dpkg" "${MC_STUB_ROOT}/apt-get" "${MC_BIN_PASS}/"
+cp "${MC_STUB_ROOT}/sudo-pass" "${MC_BIN_PASS}/sudo"
+
+# Bin dir for the elevated-failure path: sudo refuses.
+MC_BIN_FAIL="${MC_STUB_ROOT}/bin-fail"
+mc_make_bin "${MC_BIN_FAIL}" >/dev/null
+cp "${MC_STUB_ROOT}/dpkg" "${MC_STUB_ROOT}/apt-get" "${MC_BIN_FAIL}/"
+cp "${MC_STUB_ROOT}/sudo-refuse" "${MC_BIN_FAIL}/sudo"
+
+# mc_seed_state FILE PKGS... — write a stub dpkg state file listing PKGS as
+# the installed packages.
+mc_seed_state() {
+  local file="${1}"
+  shift
+  : > "${file}"
+  local pkg
+  for pkg in "$@"; do
+    printf '%s\n' "${pkg}" >> "${file}"
+  done
+}
+
+# Stage (ax): gate + read-only smokes in the real repo.
+printf 'Stage ax: multimedia-codecs gate, scan, list badge, plan/dry-run, non-interactive\n'
+
+output_ax_scan=""
+code_ax_scan="0"
+output_ax_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_ax_scan="$?"
+if [[ "${code_ax_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with multimedia-codecs present (got ${code_ax_scan})"
+else
+  pass "butler --scan exits 0 with multimedia-codecs present"
+fi
+if printf '%s\n' "${output_ax_scan}" | grep -q "PASS multimedia-codecs"; then
+  pass "butler --scan reports PASS multimedia-codecs"
+else
+  fail "butler --scan reports PASS multimedia-codecs"
+fi
+
+output_ax_lint1=""
+code_ax_lint1="0"
+output_ax_lint1="$(cd "${REPO_ROOT}" && bin/modulelint multimedia-codecs 2>&1)" || code_ax_lint1="$?"
+if [[ "${code_ax_lint1}" -ne 0 ]]; then
+  fail "bin/modulelint multimedia-codecs exits 0 (got ${code_ax_lint1})"
+else
+  pass "bin/modulelint multimedia-codecs exits 0"
+fi
+if printf '%s\n' "${output_ax_lint1}" | grep -q "PASS multimedia-codecs"; then
+  pass "bin/modulelint reports PASS multimedia-codecs"
+else
+  fail "bin/modulelint reports PASS multimedia-codecs"
+fi
+
+output_ax_lint=""
+code_ax_lint="0"
+output_ax_lint="$(cd "${REPO_ROOT}" && bin/modulelint 2>&1)" || code_ax_lint="$?"
+if [[ "${code_ax_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 over all modules with multimedia-codecs present (got ${code_ax_lint})"
+else
+  pass "bin/modulelint exits 0 over all modules with multimedia-codecs present"
+fi
+
+output_ax_list=""
+code_ax_list="0"
+output_ax_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_ax_list="$?"
+if [[ "${code_ax_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_ax_list})"
+else
+  pass "butler --list exits 0"
+fi
+mc_ax_list_line="$(printf '%s\n' "${output_ax_list}" | grep -- "multimedia-codecs: Multimedia codecs" || true)"
+if [[ -n "${mc_ax_list_line}" ]]; then
+  pass "butler --list shows multimedia-codecs: Multimedia codecs"
+else
+  fail "butler --list shows multimedia-codecs: Multimedia codecs"
+fi
+if [[ "${mc_ax_list_line}" == *"⚠ elevated"* ]]; then
+  pass "butler --list shows the elevated badge on multimedia-codecs"
+else
+  fail "butler --list shows the elevated badge on multimedia-codecs"
+fi
+if printf '%s\n' "${output_ax_list}" | grep -q "audio-repair" \
+  && printf '%s\n' "${output_ax_list}" | grep -q "timeshift-guardian" \
+  && printf '%s\n' "${output_ax_list}" | grep -q "desktop-shortcut-creator"; then
+  pass "butler --list still shows the earlier modules"
+else
+  fail "butler --list still shows the earlier modules"
+fi
+
+# Menu position smoke: with the current module set, order 40 renders as
+# entry 4 on page 1 (positions are recomputed at scan time).
+output_ax_menu=""
+code_ax_menu="0"
+output_ax_menu="$(printf 'q\n' | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || code_ax_menu="$?"
+mc_ax_menu_line="$(printf '%s\n' "${output_ax_menu}" | grep -F "4) Multimedia codecs" || true)"
+if [[ "${code_ax_menu}" -eq 0 && -n "${mc_ax_menu_line}" && "${mc_ax_menu_line}" == *"⚠ elevated"* ]]; then
+  pass "menu renders Multimedia codecs at its order-40 position with the elevated badge"
+else
+  fail "menu renders Multimedia codecs at its order-40 position with the elevated badge (got ${code_ax_menu}: ${mc_ax_menu_line})"
+fi
+
+# Menu navigation, no undo affordance: the detail screen of an undo: false
+# module offers [d]ry-run/[r]un/[b]ack and never [u]ndo. Scripted stdin:
+# /multimedia filters to the module, 1 opens its detail screen, b goes
+# back, q quits.
+output_ax_nav=""
+code_ax_nav="0"
+output_ax_nav="$(printf '/multimedia\n1\nb\nq\n' | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || code_ax_nav="$?"
+if [[ "${code_ax_nav}" -ne 0 ]]; then
+  fail "menu navigation through the multimedia-codecs detail screen exits 0 (got ${code_ax_nav})"
+else
+  pass "menu navigation through the multimedia-codecs detail screen exits 0"
+fi
+if printf '%s\n' "${output_ax_nav}" | grep -Fq "[d]ry-run  [r]un  [b]ack"; then
+  pass "detail screen offers dry-run/run/back"
+else
+  fail "detail screen offers dry-run/run/back"
+fi
+if printf '%s\n' "${output_ax_nav}" | grep -Fq "[u]ndo"; then
+  fail "detail screen shows NO [u]ndo affordance (undo: false)"
+else
+  pass "detail screen shows NO [u]ndo affordance (undo: false)"
+fi
+if printf '%s\n' "${output_ax_nav}" | grep -q "Undo: not available"; then
+  pass "detail screen states undo is not available"
+else
+  fail "detail screen states undo is not available"
+fi
+
+MC_AX_HOME="${TMPBASE}/mc-home-ax"
+MC_AX_HOME_BEFORE="${TMPBASE}/mc-home-ax-before"
+mkdir -p "${MC_AX_HOME}"
+cp -a "${MC_AX_HOME}" "${MC_AX_HOME_BEFORE}"
+
+output_ax_plan=""
+code_ax_plan="0"
+output_ax_plan="$(HOME="${MC_AX_HOME}" bash "${MC_MODULE}" plan < /dev/null 2>&1)" || code_ax_plan="$?"
+mc_ax_plan_lines="$(printf '%s\n' "${output_ax_plan}" | grep -c . || true)"
+if [[ "${code_ax_plan}" -eq 0 && -n "${output_ax_plan}" ]]; then
+  pass "multimedia-codecs plan exits 0 and non-empty"
+else
+  fail "multimedia-codecs plan exits 0 and non-empty (got ${code_ax_plan})"
+fi
+if [[ "${mc_ax_plan_lines}" -le 23 ]]; then
+  pass "multimedia-codecs plan renders in <= 23 lines (got ${mc_ax_plan_lines})"
+else
+  fail "multimedia-codecs plan renders in <= 23 lines (got ${mc_ax_plan_lines})"
+fi
+if printf '%s\n' "${output_ax_plan}" | grep -Fq "not undone by this module"; then
+  pass "multimedia-codecs plan contains the no-undo notice"
+else
+  fail "multimedia-codecs plan contains the no-undo notice"
+fi
+
+output_ax_dry=""
+code_ax_dry="0"
+output_ax_dry="$(HOME="${MC_AX_HOME}" bash "${MC_MODULE}" dry-run < /dev/null 2>&1)" || code_ax_dry="$?"
+mc_ax_dry_lines="$(printf '%s\n' "${output_ax_dry}" | grep -c . || true)"
+if [[ "${code_ax_dry}" -eq 0 && -n "${output_ax_dry}" ]]; then
+  pass "multimedia-codecs dry-run exits 0 and non-empty"
+else
+  fail "multimedia-codecs dry-run exits 0 and non-empty (got ${code_ax_dry})"
+fi
+if [[ "${mc_ax_dry_lines}" -le 23 ]]; then
+  pass "multimedia-codecs dry-run renders in <= 23 lines (got ${mc_ax_dry_lines})"
+else
+  fail "multimedia-codecs dry-run renders in <= 23 lines (got ${mc_ax_dry_lines})"
+fi
+if printf '%s\n' "${output_ax_dry}" | grep -Fq "dpkg -s"; then
+  pass "multimedia-codecs dry-run contains the exact string 'dpkg -s'"
+else
+  fail "multimedia-codecs dry-run contains the exact string 'dpkg -s'"
+fi
+if printf '%s\n' "${output_ax_dry}" | grep -Fq "sudo apt-get install -y"; then
+  pass "multimedia-codecs dry-run shows apt-get install as the elevated line via the helper display"
+else
+  fail "multimedia-codecs dry-run shows apt-get install as the elevated line via the helper display"
+fi
+if printf '%s\n' "${output_ax_dry}" | grep -Fq "not undone by this module"; then
+  pass "multimedia-codecs dry-run contains the no-undo notice"
+else
+  fail "multimedia-codecs dry-run contains the no-undo notice"
+fi
+if diff -r "${MC_AX_HOME}" "${MC_AX_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "multimedia-codecs plan and dry-run write nothing to the fake HOME"
+else
+  fail "multimedia-codecs plan and dry-run modified the fake HOME"
+fi
+
+# Menu-flag smoke: --run <slug> --dry-run is non-destructive.
+code_ax_menudry="0"
+HOME="${MC_AX_HOME}" bash -c 'cd "'"${REPO_ROOT}"'" && ./butler --run multimedia-codecs --dry-run' >/dev/null 2>&1 || code_ax_menudry="$?"
+if [[ "${code_ax_menudry}" -eq 0 ]]; then
+  pass "butler --run multimedia-codecs --dry-run exits 0"
+else
+  fail "butler --run multimedia-codecs --dry-run exits 0 (got ${code_ax_menudry})"
+fi
+if diff -r "${MC_AX_HOME}" "${MC_AX_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "butler --run multimedia-codecs --dry-run leaves the fake HOME untouched"
+else
+  fail "butler --run multimedia-codecs --dry-run modified the fake HOME"
+fi
+
+# Non-interactive run (modulelint compatibility): stdin /dev/null under the
+# all-installed stub set stops at the honest nothing-to-do verdict — exit 0,
+# nothing written, no elevated call in the stub log.
+MC_AX2_HOME="${TMPBASE}/mc-home-ax2"
+MC_AX2_HOME_BEFORE="${TMPBASE}/mc-home-ax2-before"
+mkdir -p "${MC_AX2_HOME}"
+cp -a "${MC_AX2_HOME}" "${MC_AX2_HOME_BEFORE}"
+MC_AX_STATE="${TMPBASE}/mc-ax-packages.txt"
+mc_seed_state "${MC_AX_STATE}" "${MC_PKG_BAD}" "${MC_PKG_UGLY}" "${MC_PKG_LIBAV}" "${MC_PKG_EXTRA}"
+AX_ELEV="${TMPBASE}/mc-ax-elevated.log"
+AX_APT="${TMPBASE}/mc-ax-aptget.log"
+output_ax_run=""
+code_ax_run="0"
+output_ax_run="$(PATH="${MC_BIN_PASS}" HOME="${MC_AX2_HOME}" \
+  DPKG_STUB_STATE="${MC_AX_STATE}" APTGET_STUB_LOG="${AX_APT}" ELEVATED_STUB_LOG="${AX_ELEV}" \
+  bash "${MC_MODULE}" run < /dev/null 2>&1)" || code_ax_run="$?"
+if [[ "${code_ax_run}" -eq 0 ]]; then
+  pass "multimedia-codecs non-interactive all-installed run exits 0"
+else
+  fail "multimedia-codecs non-interactive all-installed run exits 0 (got ${code_ax_run})"
+fi
+if printf '%s\n' "${output_ax_run}" | grep -q "nothing to do"; then
+  pass "multimedia-codecs non-interactive all-installed run reports nothing to do"
+else
+  fail "multimedia-codecs non-interactive all-installed run reports nothing to do"
+fi
+if [[ ! -s "${AX_ELEV}" ]]; then
+  pass "multimedia-codecs non-interactive all-installed run makes no elevated call"
+else
+  fail "multimedia-codecs non-interactive all-installed run makes no elevated call"
+fi
+if [[ ! -e "${AX_APT}" ]]; then
+  pass "multimedia-codecs non-interactive all-installed run never calls apt-get"
+else
+  fail "multimedia-codecs non-interactive all-installed run never calls apt-get"
+fi
+if diff -r "${MC_AX2_HOME}" "${MC_AX2_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "multimedia-codecs non-interactive all-installed run writes nothing"
+else
+  fail "multimedia-codecs non-interactive all-installed run modified the fake HOME"
+fi
+
+# Stage (ay): all four installed under the stub dpkg -> honest verdict,
+# exit 0, no elevated call, and no state file anywhere (fake HOME
+# byte-identical; the module never writes one by design).
+printf 'Stage ay: multimedia-codecs all-installed verdict\n'
+MC_AY_HOME="${TMPBASE}/mc-home-ay"
+MC_AY_HOME_BEFORE="${TMPBASE}/mc-home-ay-before"
+mkdir -p "${MC_AY_HOME}"
+cp -a "${MC_AY_HOME}" "${MC_AY_HOME_BEFORE}"
+MC_AY_STATE="${TMPBASE}/mc-ay-packages.txt"
+mc_seed_state "${MC_AY_STATE}" "${MC_PKG_BAD}" "${MC_PKG_UGLY}" "${MC_PKG_LIBAV}" "${MC_PKG_EXTRA}"
+AY_ELEV="${TMPBASE}/mc-ay-elevated.log"
+AY_DPKG="${TMPBASE}/mc-ay-dpkg.log"
+output_ay=""
+code_ay="0"
+output_ay="$(PATH="${MC_BIN_PASS}" HOME="${MC_AY_HOME}" \
+  DPKG_STUB_STATE="${MC_AY_STATE}" DPKG_STUB_LOG="${AY_DPKG}" ELEVATED_STUB_LOG="${AY_ELEV}" \
+  bash "${MC_MODULE}" run < /dev/null 2>&1)" || code_ay="$?"
+if [[ "${code_ay}" -eq 0 ]]; then
+  pass "multimedia-codecs all-installed run exits 0"
+else
+  fail "multimedia-codecs all-installed run exits 0 (got ${code_ay})"
+fi
+if printf '%s\n' "${output_ay}" | grep -q "all four curated codec packages are already installed; nothing to do"; then
+  pass "multimedia-codecs all-installed verdict says already installed, nothing to do"
+else
+  fail "multimedia-codecs all-installed verdict says already installed, nothing to do"
+fi
+if [[ -f "${AY_DPKG}" ]] && [[ "$(grep -c '^dpkg -s ' "${AY_DPKG}" || true)" -eq 4 ]]; then
+  pass "multimedia-codecs all-installed run checks all four packages with dpkg -s"
+else
+  fail "multimedia-codecs all-installed run checks all four packages with dpkg -s"
+fi
+if [[ ! -s "${AY_ELEV}" ]]; then
+  pass "multimedia-codecs all-installed run makes no elevated call"
+else
+  fail "multimedia-codecs all-installed run makes no elevated call"
+fi
+if diff -r "${MC_AY_HOME}" "${MC_AY_HOME_BEFORE}" >/dev/null 2>&1 \
+  && [[ ! -e "${MC_AY_HOME}/.local" ]]; then
+  pass "multimedia-codecs all-installed run writes no state file anywhere (fake HOME byte-identical)"
+else
+  fail "multimedia-codecs all-installed run wrote something (fake HOME differs or .local exists)"
+fi
+
+# Stage (az): two missing + confirm-no -> exit 0, "Nothing installed.",
+# no apt-get call in the stub log, nothing written. Driven with piped
+# stdin 'n' (the menu path cannot script elevated confirmation).
+printf 'Stage az: multimedia-codecs missing + confirm-no\n'
+MC_AZ_HOME="${TMPBASE}/mc-home-az"
+MC_AZ_HOME_BEFORE="${TMPBASE}/mc-home-az-before"
+mkdir -p "${MC_AZ_HOME}"
+cp -a "${MC_AZ_HOME}" "${MC_AZ_HOME_BEFORE}"
+MC_AZ_STATE="${TMPBASE}/mc-az-packages.txt"
+mc_seed_state "${MC_AZ_STATE}" "${MC_PKG_BAD}" "${MC_PKG_UGLY}"
+cp "${MC_AZ_STATE}" "${MC_AZ_STATE}.seeded"
+AZ_APT="${TMPBASE}/mc-az-aptget.log"
+AZ_ELEV="${TMPBASE}/mc-az-elevated.log"
+output_az=""
+code_az="0"
+output_az="$(printf 'n\n' | PATH="${MC_BIN_PASS}" HOME="${MC_AZ_HOME}" \
+  DPKG_STUB_STATE="${MC_AZ_STATE}" APTGET_STUB_LOG="${AZ_APT}" ELEVATED_STUB_LOG="${AZ_ELEV}" \
+  bash "${MC_MODULE}" run 2>&1)" || code_az="$?"
+if [[ "${code_az}" -eq 0 ]]; then
+  pass "multimedia-codecs confirm-no exits 0"
+else
+  fail "multimedia-codecs confirm-no exits 0 (got ${code_az})"
+fi
+if printf '%s\n' "${output_az}" | grep -Fq "Nothing installed."; then
+  pass "multimedia-codecs confirm-no prints Nothing installed."
+else
+  fail "multimedia-codecs confirm-no prints Nothing installed."
+fi
+if printf '%s\n' "${output_az}" | grep -Fq "missing:   ${MC_PKG_LIBAV}, ${MC_PKG_EXTRA}"; then
+  pass "multimedia-codecs confirm-no names the two missing packages first"
+else
+  fail "multimedia-codecs confirm-no names the two missing packages first"
+fi
+if [[ ! -e "${AZ_APT}" ]] && [[ ! -s "${AZ_ELEV}" ]]; then
+  pass "multimedia-codecs confirm-no makes no apt-get and no elevated call"
+else
+  fail "multimedia-codecs confirm-no makes no apt-get and no elevated call"
+fi
+if cmp -s "${MC_AZ_STATE}" "${MC_AZ_STATE}.seeded" \
+  && diff -r "${MC_AZ_HOME}" "${MC_AZ_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "multimedia-codecs confirm-no writes nothing (state and fake HOME byte-identical)"
+else
+  fail "multimedia-codecs confirm-no wrote something"
+fi
+
+# Stage (ba): two missing + confirm-yes + full success. Scripted stdin 'y';
+# the stub apt-get exits 0 and flips the two missing packages to installed
+# in the stub dpkg state, so the module's per-package verification sees
+# success. Asserts the honest full report and exactly one stub apt-get
+# install call naming exactly the two missing packages.
+printf 'Stage ba: multimedia-codecs confirm-yes full success\n'
+MC_BA_HOME="${TMPBASE}/mc-home-ba"
+MC_BA_HOME_BEFORE="${TMPBASE}/mc-home-ba-before"
+mkdir -p "${MC_BA_HOME}"
+cp -a "${MC_BA_HOME}" "${MC_BA_HOME_BEFORE}"
+MC_BA_STATE="${TMPBASE}/mc-ba-packages.txt"
+mc_seed_state "${MC_BA_STATE}" "${MC_PKG_BAD}" "${MC_PKG_UGLY}"
+BA_APT="${TMPBASE}/mc-ba-aptget.log"
+BA_ELEV="${TMPBASE}/mc-ba-elevated.log"
+output_ba=""
+code_ba="0"
+output_ba="$(printf 'y\n' | PATH="${MC_BIN_PASS}" HOME="${MC_BA_HOME}" \
+  DPKG_STUB_STATE="${MC_BA_STATE}" APTGET_STUB_LOG="${BA_APT}" ELEVATED_STUB_LOG="${BA_ELEV}" \
+  bash "${MC_MODULE}" run 2>&1)" || code_ba="$?"
+if [[ "${code_ba}" -eq 0 ]]; then
+  pass "multimedia-codecs full-success run exits 0"
+else
+  fail "multimedia-codecs full-success run exits 0 (got ${code_ba})"
+fi
+if printf '%s\n' "${output_ba}" | grep -Fq "installed: ${MC_PKG_BAD}, ${MC_PKG_UGLY}" \
+  && printf '%s\n' "${output_ba}" | grep -Fq "missing:   ${MC_PKG_LIBAV}, ${MC_PKG_EXTRA}"; then
+  pass "multimedia-codecs full success shows installed-vs-missing before confirming"
+else
+  fail "multimedia-codecs full success shows installed-vs-missing before confirming"
+fi
+mc_ba_missing_line="$(printf '%s\n' "${output_ba}" | grep -n -F "missing:" | head -n 1 | cut -d: -f1 || true)"
+mc_ba_elev_line="$(printf '%s\n' "${output_ba}" | grep -n -F "Running elevated command" | head -n 1 | cut -d: -f1 || true)"
+if [[ -n "${mc_ba_missing_line}" && -n "${mc_ba_elev_line}" ]] \
+  && [[ "${mc_ba_missing_line}" -lt "${mc_ba_elev_line}" ]]; then
+  pass "multimedia-codecs lists the missing packages before the elevated step runs"
+else
+  fail "multimedia-codecs lists the missing packages before the elevated step runs (got ${mc_ba_missing_line} vs ${mc_ba_elev_line})"
+fi
+if printf '%s\n' "${output_ba}" | grep -Fq "sudo apt-get install -y ${MC_PKG_LIBAV} ${MC_PKG_EXTRA}"; then
+  pass "multimedia-codecs shows the exact elevated command via the helper display"
+else
+  fail "multimedia-codecs shows the exact elevated command via the helper display"
+fi
+if printf '%s\n' "${output_ba}" | grep -Fq "${MC_PKG_LIBAV} — installed" \
+  && printf '%s\n' "${output_ba}" | grep -Fq "${MC_PKG_EXTRA} — installed"; then
+  pass "multimedia-codecs reports per-package success for both packages"
+else
+  fail "multimedia-codecs reports per-package success for both packages"
+fi
+if printf '%s\n' "${output_ba}" | grep -Fq "sudo apt-get remove ${MC_PKG_LIBAV} ${MC_PKG_EXTRA}"; then
+  pass "multimedia-codecs prints the manual removal command via the helper display"
+else
+  fail "multimedia-codecs prints the manual removal command via the helper display"
+fi
+if printf '%s\n' "${output_ba}" | grep -Fq "not undone by mintbutler"; then
+  pass "multimedia-codecs full success ends with the no-undo reminder"
+else
+  fail "multimedia-codecs full success ends with the no-undo reminder"
+fi
+ba_apt_lines="0"
+if [[ -f "${BA_APT}" ]]; then
+  ba_apt_lines="$(grep -c '^apt-get install -y ' "${BA_APT}" || true)"
+fi
+if [[ "${ba_apt_lines}" -eq 1 ]] \
+  && grep -Fxq "apt-get install -y ${MC_PKG_LIBAV} ${MC_PKG_EXTRA}" "${BA_APT}"; then
+  pass "stub log shows exactly one apt-get install -y call naming exactly the two missing packages"
+else
+  fail "stub log shows exactly one apt-get install -y call naming exactly the two missing packages (got ${ba_apt_lines} lines)"
+fi
+if grep -q "^${MC_PKG_LIBAV}$" "${MC_BA_STATE}" && grep -q "^${MC_PKG_EXTRA}$" "${MC_BA_STATE}" \
+  && grep -q "^${MC_PKG_BAD}$" "${MC_BA_STATE}" && grep -q "^${MC_PKG_UGLY}$" "${MC_BA_STATE}"; then
+  pass "stub dpkg state flips the two missing packages to installed"
+else
+  fail "stub dpkg state flips the two missing packages to installed"
+fi
+if diff -r "${MC_BA_HOME}" "${MC_BA_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "multimedia-codecs full success writes nothing to the fake HOME (no state file)"
+else
+  fail "multimedia-codecs full success modified the fake HOME"
+fi
+
+# Stage (bb): confirm-yes + MIXED result. The stub apt-get exits 0 but
+# APTGET_STUB_SKIP keeps libavcodec-extra missing in the stub dpkg state,
+# so verification reports one installed and one failed package: exit 1,
+# per-package lists and the plain retry hint on stdout, one plain stderr
+# line (the ask prompt shares its stderr line under scripted stdin).
+printf 'Stage bb: multimedia-codecs confirm-yes mixed result\n'
+MC_BB_HOME="${TMPBASE}/mc-home-bb"
+MC_BB_HOME_BEFORE="${TMPBASE}/mc-home-bb-before"
+mkdir -p "${MC_BB_HOME}"
+cp -a "${MC_BB_HOME}" "${MC_BB_HOME_BEFORE}"
+MC_BB_STATE="${TMPBASE}/mc-bb-packages.txt"
+mc_seed_state "${MC_BB_STATE}" "${MC_PKG_BAD}" "${MC_PKG_UGLY}"
+BB_APT="${TMPBASE}/mc-bb-aptget.log"
+BB_STDOUT="${TMPBASE}/mc-bb.stdout"
+BB_STDERR="${TMPBASE}/mc-bb.stderr"
+code_bb="0"
+printf 'y\n' | PATH="${MC_BIN_PASS}" HOME="${MC_BB_HOME}" \
+  DPKG_STUB_STATE="${MC_BB_STATE}" APTGET_STUB_SKIP="${MC_PKG_EXTRA}" \
+  APTGET_STUB_LOG="${BB_APT}" \
+  bash "${MC_MODULE}" run > "${BB_STDOUT}" 2> "${BB_STDERR}" || code_bb="$?"
+if [[ "${code_bb}" -eq 1 ]]; then
+  pass "multimedia-codecs mixed result exits 1"
+else
+  fail "multimedia-codecs mixed result exits 1 (got ${code_bb})"
+fi
+if grep -Fq "${MC_PKG_LIBAV} — installed" "${BB_STDOUT}"; then
+  pass "multimedia-codecs mixed result names the installed package"
+else
+  fail "multimedia-codecs mixed result names the installed package"
+fi
+if grep -Fq "${MC_PKG_EXTRA} — still missing" "${BB_STDOUT}"; then
+  pass "multimedia-codecs mixed result names the failed package"
+else
+  fail "multimedia-codecs mixed result names the failed package"
+fi
+if grep -qi "Refresh the software sources" "${BB_STDOUT}" \
+  && grep -qi "check the network" "${BB_STDOUT}" \
+  && grep -qi "re-run" "${BB_STDOUT}"; then
+  pass "multimedia-codecs mixed result prints the plain retry hint"
+else
+  fail "multimedia-codecs mixed result prints the plain retry hint"
+fi
+if grep -Fq "sudo apt-get remove ${MC_PKG_LIBAV}" "${BB_STDOUT}" \
+  && ! grep -Fq "sudo apt-get remove ${MC_PKG_LIBAV} ${MC_PKG_EXTRA}" "${BB_STDOUT}"; then
+  pass "multimedia-codecs mixed result prints the removal command for what did install only"
+else
+  fail "multimedia-codecs mixed result prints the removal command for what did install only"
+fi
+bb_err_lines="$(grep -c . "${BB_STDERR}" || true)"
+if [[ "${bb_err_lines}" -eq 1 ]] && grep -q "still missing" "${BB_STDERR}"; then
+  pass "multimedia-codecs mixed result prints one plain stderr line"
+else
+  fail "multimedia-codecs mixed result prints one plain stderr line (got ${bb_err_lines} lines)"
+fi
+if diff -r "${MC_BB_HOME}" "${MC_BB_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "multimedia-codecs mixed result writes nothing to the fake HOME"
+else
+  fail "multimedia-codecs mixed result modified the fake HOME"
+fi
+
+# Stage (bc): elevated failure. The stub sudo refuses, so the single
+# elevated apt-get step fails: non-zero exit, one plain stderr line naming
+# the failed elevated step (lines carrying the stub refusal are filtered;
+# under scripted stdin the ask prompt shares the refusal's line), nothing
+# claimed on stdout, nothing written anywhere.
+printf 'Stage bc: multimedia-codecs elevated failure\n'
+MC_BC_HOME="${TMPBASE}/mc-home-bc"
+MC_BC_HOME_BEFORE="${TMPBASE}/mc-home-bc-before"
+mkdir -p "${MC_BC_HOME}"
+cp -a "${MC_BC_HOME}" "${MC_BC_HOME_BEFORE}"
+MC_BC_STATE="${TMPBASE}/mc-bc-packages.txt"
+mc_seed_state "${MC_BC_STATE}" "${MC_PKG_BAD}" "${MC_PKG_UGLY}"
+cp "${MC_BC_STATE}" "${MC_BC_STATE}.seeded"
+BC_APT="${TMPBASE}/mc-bc-aptget.log"
+BC_STDOUT="${TMPBASE}/mc-bc.stdout"
+BC_STDERR="${TMPBASE}/mc-bc.stderr"
+code_bc="0"
+printf 'y\n' | PATH="${MC_BIN_FAIL}" HOME="${MC_BC_HOME}" \
+  DPKG_STUB_STATE="${MC_BC_STATE}" APTGET_STUB_LOG="${BC_APT}" \
+  bash "${MC_MODULE}" run > "${BC_STDOUT}" 2> "${BC_STDERR}" || code_bc="$?"
+if [[ "${code_bc}" -ne 0 ]]; then
+  pass "multimedia-codecs elevated failure exits non-zero (got ${code_bc})"
+else
+  fail "multimedia-codecs elevated failure exits non-zero"
+fi
+bc_module_lines="$(grep -v 'sudo-stub:' "${BC_STDERR}" | grep -v 'Install the missing codec packages now' | grep -c . || true)"
+if [[ "${bc_module_lines}" -eq 1 ]] && grep -q "elevated apt-get step failed" "${BC_STDERR}"; then
+  pass "multimedia-codecs elevated failure prints one plain stderr line naming the failed elevated step"
+else
+  fail "multimedia-codecs elevated failure prints one plain stderr line naming the failed elevated step (got ${bc_module_lines} lines)"
+fi
+if ! grep -q "Verified" "${BC_STDOUT}" && ! grep -Fq "— installed" "${BC_STDOUT}"; then
+  pass "multimedia-codecs elevated failure claims no result on stdout"
+else
+  fail "multimedia-codecs elevated failure claims no result on stdout"
+fi
+if [[ ! -e "${BC_APT}" ]]; then
+  pass "multimedia-codecs elevated failure never reaches apt-get"
+else
+  fail "multimedia-codecs elevated failure never reaches apt-get"
+fi
+if cmp -s "${MC_BC_STATE}" "${MC_BC_STATE}.seeded" \
+  && diff -r "${MC_BC_HOME}" "${MC_BC_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "multimedia-codecs elevated failure writes nothing (state and fake HOME byte-identical)"
+else
+  fail "multimedia-codecs elevated failure wrote something"
+fi
+
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
