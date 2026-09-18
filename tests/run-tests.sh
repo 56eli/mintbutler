@@ -2523,6 +2523,574 @@ else
   fail "timeshift-guardian elevated-failure log contains NO --create"
 fi
 
+# ---------------------------------------------------------------------------
+# Stages (ar)-(aw): audio-repair (elevated, diagnose-first) — stub-only
+# verification. Every stage runs with a controlled PATH (stub pactl/amixer/
+# dmesg/sudo plus symlinks to the coreutils the module needs) and a fake
+# HOME under mktemp. No stage ever invokes real pactl, amixer, dmesg, or
+# sudo: the elevated dmesg path goes through a stub sudo that runs the stub
+# dmesg (stage (aw) uses a refusing sudo instead). Where the module's
+# interactive confirmation matters, stages drive the module binary directly
+# with piped stdin (the menu path cannot script elevated confirmation).
+# ---------------------------------------------------------------------------
+
+AR_MODULE="${REPO_ROOT}/modules/audio-repair/module.sh"
+AR_STUB_ROOT="${TMPBASE}/ar-stubs"
+AR_STATE_REL=".local/state/mintbutler/audio-repair/mixer.record"
+mkdir -p "${AR_STUB_ROOT}"
+
+# Controlled-PATH builder: symlink the coreutils the module (and the lib
+# helpers it sources) needs from the host; each stage's bin dir then gets
+# only the stubs that stage wants present.
+ar_make_bin() {
+  local dir="${1:-}"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in dirname sed mkdir rm rmdir mv bash date tr grep cut awk; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  printf '%s\n' "${dir}"
+}
+
+# Stub pactl: logs each call to PACTL_STUB_LOG (when set). `pactl info`
+# reports a PipeWire-backed server; `pactl list short sinks` reports one
+# real sink, or only a dummy sink when PACTL_STUB_SINKS_MODE=dummy.
+cat <<'AR_PACTL_STUB' > "${AR_STUB_ROOT}/pactl"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${PACTL_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'pactl%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+case "${1:-} ${2:-} ${3:-}" in
+  'info  ')
+    printf 'Server String: /run/user/1000/pulse/native\n'
+    printf 'Server Name: PulseAudio (on PipeWire 1.0.5)\n'
+    printf 'Server Version: 16.0.0\n'
+    ;;
+  'list short sinks')
+    if [[ "${PACTL_STUB_SINKS_MODE:-real}" == "dummy" ]]; then
+      printf '42\tdummy-sink\tmodule-null-sink.c\ts16le 2ch 44100Hz\tSUSPENDED\n'
+    else
+      printf '0\talsa_output.pci-0000_00_1f.3.analog-stereo\tmodule-alsa-card.c\ts16le 2ch 44100Hz\tSUSPENDED\n'
+    fi
+    ;;
+  *)
+    printf 'pactl-stub: unsupported invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+AR_PACTL_STUB
+
+# Stub amixer: file-backed Master mixer. AMIXER_STUB_STATE names a
+# muted=/volume= key-value file; AMIXER_STUB_LOG (when set) records every
+# invocation. Bare `amixer` renders a realistic Master block;
+# `amixer -q sset Master <N>% [mute|unmute] ...` mutates the fake state.
+cat <<'AR_AMIXER_STUB' > "${AR_STUB_ROOT}/amixer"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${AMIXER_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'amixer%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+STATE="${AMIXER_STUB_STATE:?amixer-stub: AMIXER_STUB_STATE is not set}"
+stub_muted=0
+stub_volume=0
+if [[ -f "${STATE}" ]]; then
+  while IFS='=' read -r k v; do
+    case "${k}" in
+      muted) stub_muted="${v}" ;;
+      volume) stub_volume="${v}" ;;
+    esac
+  done < "${STATE}"
+fi
+if [[ "${1:-}" == "-q" && "${2:-}" == "sset" && "${3:-}" == "Master" ]]; then
+  shift 3
+  arg=""
+  for arg in "$@"; do
+    case "${arg}" in
+      *%) stub_volume="${arg%\%}" ;;
+      mute) stub_muted=1 ;;
+      unmute) stub_muted=0 ;;
+      *)
+        printf 'amixer-stub: unsupported sset value: %s\n' "${arg}" >&2
+        exit 2
+        ;;
+    esac
+  done
+  printf 'muted=%s\nvolume=%s\n' "${stub_muted}" "${stub_volume}" > "${STATE}"
+  exit 0
+fi
+if [[ "$#" -eq 0 ]]; then
+  word=on
+  if [[ "${stub_muted}" == "1" ]]; then
+    word=off
+  fi
+  printf "Simple mixer control 'Master',0\n"
+  printf '  Capabilities: pvolume pswitch pswitch-joined\n'
+  printf '  Playback channels: Front Left - Front Right\n'
+  printf '  Limits: Playback 0 - 65536\n'
+  printf '  Mono:\n'
+  printf '  Front Left: Playback 65536 [%s%%] [%s]\n' "${stub_volume}" "${word}"
+  printf '  Front Right: Playback 65536 [%s%%] [%s]\n' "${stub_volume}" "${word}"
+  exit 0
+fi
+printf 'amixer-stub: unsupported invocation: %s\n' "$*" >&2
+exit 2
+AR_AMIXER_STUB
+
+# Stub dmesg: canned kernel log with three audio driver/firmware failure
+# lines (sof + snd_ signatures) and one non-audio noise line.
+cat <<'AR_DMESG_STUB' > "${AR_STUB_ROOT}/dmesg"
+#!/usr/bin/env bash
+set -euo pipefail
+printf '[   12.345678] sof-audio-pci-intel-tgl 0000:00:1f.3: firmware: failed to load intel/sof/sof-tgl.ri (-2)\n'
+printf '[   12.346901] sof-audio-pci-intel-tgl 0000:00:1f.3: error: sof_probe_work failed err: -2\n'
+printf '[   13.300002] snd_hda_intel 0000:00:1f.3: no codecs initialized (timeout)\n'
+printf '[   14.000003] usb 1-2: device descriptor read/64, error -71\n'
+AR_DMESG_STUB
+
+# Stub sudo (passthrough): logs to ELEVATED_STUB_LOG, then runs its command
+# — the dmesg path executes the stub dmesg through this, mirroring the real
+# elevate flow without any privilege.
+cat <<'AR_SUDO_PASS_STUB' > "${AR_STUB_ROOT}/sudo-pass"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${ELEVATED_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'sudo%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+exec "$@"
+AR_SUDO_PASS_STUB
+
+# Stub sudo (refusing): one stderr line and a non-zero exit, like a sudo
+# that cannot authenticate with stdin closed.
+cat <<'AR_SUDO_REFUSE_STUB' > "${AR_STUB_ROOT}/sudo-refuse"
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sudo-stub: refused %s\n' "$*" >&2
+exit 1
+AR_SUDO_REFUSE_STUB
+
+chmod +x "${AR_STUB_ROOT}/pactl" "${AR_STUB_ROOT}/amixer" "${AR_STUB_ROOT}/dmesg" \
+  "${AR_STUB_ROOT}/sudo-pass" "${AR_STUB_ROOT}/sudo-refuse"
+
+# Bin dir with only coreutils: no pactl/amixer at all (stage ar preflight).
+AR_BIN_EMPTY="${AR_STUB_ROOT}/bin-empty"
+ar_make_bin "${AR_BIN_EMPTY}" >/dev/null
+
+# Bin dir for the sink-preserving paths: pactl + amixer + passthrough sudo.
+AR_BIN_MAIN="${AR_STUB_ROOT}/bin-main"
+ar_make_bin "${AR_BIN_MAIN}" >/dev/null
+cp "${AR_STUB_ROOT}/pactl" "${AR_STUB_ROOT}/amixer" "${AR_BIN_MAIN}/"
+cp "${AR_STUB_ROOT}/sudo-pass" "${AR_BIN_MAIN}/sudo"
+
+# Bin dir for the dmesg-evidence path: adds the stub dmesg.
+AR_BIN_DMESG="${AR_STUB_ROOT}/bin-dmesg"
+ar_make_bin "${AR_BIN_DMESG}" >/dev/null
+cp "${AR_STUB_ROOT}/pactl" "${AR_STUB_ROOT}/amixer" "${AR_STUB_ROOT}/dmesg" "${AR_BIN_DMESG}/"
+cp "${AR_STUB_ROOT}/sudo-pass" "${AR_BIN_DMESG}/sudo"
+
+# Bin dir for the elevated-failure path: sudo refuses.
+AR_BIN_FAIL="${AR_STUB_ROOT}/bin-fail"
+ar_make_bin "${AR_BIN_FAIL}" >/dev/null
+cp "${AR_STUB_ROOT}/pactl" "${AR_STUB_ROOT}/amixer" "${AR_STUB_ROOT}/dmesg" "${AR_BIN_FAIL}/"
+cp "${AR_STUB_ROOT}/sudo-refuse" "${AR_BIN_FAIL}/sudo"
+
+# Stage (ar): gate + read-only smokes in the real repo.
+printf 'Stage ar: audio-repair gate, scan, list badge, plan/dry-run, missing preflight\n'
+
+output_ar_scan=""
+code_ar_scan="0"
+output_ar_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_ar_scan="$?"
+if [[ "${code_ar_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with audio-repair present (got ${code_ar_scan})"
+else
+  pass "butler --scan exits 0 with audio-repair present"
+fi
+if printf '%s\n' "${output_ar_scan}" | grep -q "PASS audio-repair"; then
+  pass "butler --scan reports PASS audio-repair"
+else
+  fail "butler --scan reports PASS audio-repair"
+fi
+
+output_ar_lint=""
+code_ar_lint="0"
+output_ar_lint="$(cd "${REPO_ROOT}" && bin/modulelint 2>&1)" || code_ar_lint="$?"
+if [[ "${code_ar_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 over all modules with audio-repair present (got ${code_ar_lint})"
+else
+  pass "bin/modulelint exits 0 over all modules with audio-repair present"
+fi
+if printf '%s\n' "${output_ar_lint}" | grep -q "PASS audio-repair"; then
+  pass "bin/modulelint reports PASS audio-repair"
+else
+  fail "bin/modulelint reports PASS audio-repair"
+fi
+
+output_ar_list=""
+code_ar_list="0"
+output_ar_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_ar_list="$?"
+if [[ "${code_ar_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_ar_list})"
+else
+  pass "butler --list exits 0"
+fi
+ar_list_line="$(printf '%s\n' "${output_ar_list}" | grep -- "audio-repair: Audio repair" || true)"
+if [[ -n "${ar_list_line}" ]]; then
+  pass "butler --list shows audio-repair: Audio repair"
+else
+  fail "butler --list shows audio-repair: Audio repair"
+fi
+if [[ "${ar_list_line}" == *"⚠ elevated"* ]]; then
+  pass "butler --list shows the elevated badge on audio-repair"
+else
+  fail "butler --list shows the elevated badge on audio-repair"
+fi
+if printf '%s\n' "${output_ar_list}" | grep -q "timeshift-guardian" \
+  && printf '%s\n' "${output_ar_list}" | grep -q "desktop-shortcut-creator"; then
+  pass "butler --list still shows the earlier modules"
+else
+  fail "butler --list still shows the earlier modules"
+fi
+
+AR_AR_HOME="${TMPBASE}/ar-home-ar"
+AR_AR_HOME_BEFORE="${TMPBASE}/ar-home-ar-before"
+mkdir -p "${AR_AR_HOME}"
+cp -a "${AR_AR_HOME}" "${AR_AR_HOME_BEFORE}"
+
+output_ar_plan=""
+code_ar_plan="0"
+output_ar_plan="$(HOME="${AR_AR_HOME}" bash "${AR_MODULE}" plan < /dev/null 2>&1)" || code_ar_plan="$?"
+ar_plan_lines="$(printf '%s\n' "${output_ar_plan}" | grep -c . || true)"
+if [[ "${code_ar_plan}" -eq 0 && -n "${output_ar_plan}" ]]; then
+  pass "audio-repair plan exits 0 and non-empty"
+else
+  fail "audio-repair plan exits 0 and non-empty (got ${code_ar_plan})"
+fi
+if [[ "${ar_plan_lines}" -le 23 ]]; then
+  pass "audio-repair plan renders in <= 23 lines (got ${ar_plan_lines})"
+else
+  fail "audio-repair plan renders in <= 23 lines (got ${ar_plan_lines})"
+fi
+
+output_ar_dry=""
+code_ar_dry="0"
+output_ar_dry="$(HOME="${AR_AR_HOME}" bash "${AR_MODULE}" dry-run < /dev/null 2>&1)" || code_ar_dry="$?"
+ar_dry_lines="$(printf '%s\n' "${output_ar_dry}" | grep -c . || true)"
+if [[ "${code_ar_dry}" -eq 0 && -n "${output_ar_dry}" ]]; then
+  pass "audio-repair dry-run exits 0 and non-empty"
+else
+  fail "audio-repair dry-run exits 0 and non-empty (got ${code_ar_dry})"
+fi
+if [[ "${ar_dry_lines}" -le 23 ]]; then
+  pass "audio-repair dry-run renders in <= 23 lines (got ${ar_dry_lines})"
+else
+  fail "audio-repair dry-run renders in <= 23 lines (got ${ar_dry_lines})"
+fi
+if printf '%s\n' "${output_ar_dry}" | grep -Fq "pactl info"; then
+  pass "audio-repair dry-run contains the exact string 'pactl info'"
+else
+  fail "audio-repair dry-run contains the exact string 'pactl info'"
+fi
+if printf '%s\n' "${output_ar_dry}" | grep -q "sudo dmesg"; then
+  pass "audio-repair dry-run shows dmesg as the elevated line via the helper display"
+else
+  fail "audio-repair dry-run shows dmesg as the elevated line via the helper display"
+fi
+if diff -r "${AR_AR_HOME}" "${AR_AR_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "audio-repair plan and dry-run write nothing to the fake HOME"
+else
+  fail "audio-repair plan and dry-run modified the fake HOME"
+fi
+
+# Menu-flag smoke: --run <slug> --dry-run is non-destructive.
+code_ar_menudry="0"
+HOME="${AR_AR_HOME}" bash -c 'cd "'"${REPO_ROOT}"'" && ./butler --run audio-repair --dry-run' >/dev/null 2>&1 || code_ar_menudry="$?"
+if [[ "${code_ar_menudry}" -eq 0 ]]; then
+  pass "butler --run audio-repair --dry-run exits 0"
+else
+  fail "butler --run audio-repair --dry-run exits 0 (got ${code_ar_menudry})"
+fi
+if diff -r "${AR_AR_HOME}" "${AR_AR_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "butler --run audio-repair --dry-run leaves the fake HOME untouched"
+else
+  fail "butler --run audio-repair --dry-run modified the fake HOME"
+fi
+
+# Run with stdin /dev/null and no pactl on PATH: preflight must stop first.
+AR_AR2_HOME="${TMPBASE}/ar-home-ar2"
+AR_AR2_HOME_BEFORE="${TMPBASE}/ar-home-ar2-before"
+mkdir -p "${AR_AR2_HOME}"
+cp -a "${AR_AR2_HOME}" "${AR_AR2_HOME_BEFORE}"
+code_ar_run="0"
+stderr_ar_run=""
+AR_AR2_STDERR="${TMPBASE}/ar-ar2.stderr"
+PATH="${AR_BIN_EMPTY}" HOME="${AR_AR2_HOME}" bash "${AR_MODULE}" run < /dev/null >/dev/null 2>"${AR_AR2_STDERR}" || code_ar_run="$?"
+stderr_ar_run="$(cat "${AR_AR2_STDERR}")"
+if [[ "${code_ar_run}" -eq 1 ]]; then
+  pass "audio-repair missing-tool run exits 1"
+else
+  fail "audio-repair missing-tool run exits 1 (got ${code_ar_run})"
+fi
+ar_err_lines="$(printf '%s\n' "${stderr_ar_run}" | grep -c . || true)"
+if [[ "${ar_err_lines}" -eq 1 ]] && printf '%s\n' "${stderr_ar_run}" | grep -qi "pactl" \
+  && printf '%s\n' "${stderr_ar_run}" | grep -qi "Mint"; then
+  pass "audio-repair missing-tool prints one plain stderr line naming pactl and Mint"
+else
+  fail "audio-repair missing-tool prints one plain stderr line naming pactl and Mint (got ${ar_err_lines} lines: ${stderr_ar_run})"
+fi
+if diff -r "${AR_AR2_HOME}" "${AR_AR2_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "audio-repair missing-tool writes nothing to the fake HOME"
+else
+  fail "audio-repair missing-tool modified the fake HOME"
+fi
+
+# Stage (as): healthy chain — real sink, Master unmuted at 74%.
+printf 'Stage as: audio-repair healthy chain verdict\n'
+AR_AS_HOME="${TMPBASE}/ar-home-as"
+AR_AS_MIXER="${TMPBASE}/ar-mixer-as.txt"
+mkdir -p "${AR_AS_HOME}"
+printf 'muted=0\nvolume=74\n' > "${AR_AS_MIXER}"
+AS_ELEV="${TMPBASE}/ar-as-elevated.log"
+AS_AMIXER_LOG="${TMPBASE}/ar-as-amixer.log"
+output_as=""
+code_as="0"
+output_as="$(PATH="${AR_BIN_MAIN}" HOME="${AR_AS_HOME}" \
+  PACTL_STUB_LOG="${TMPBASE}/ar-as-pactl.log" \
+  AMIXER_STUB_STATE="${AR_AS_MIXER}" AMIXER_STUB_LOG="${AS_AMIXER_LOG}" \
+  ELEVATED_STUB_LOG="${AS_ELEV}" \
+  bash "${AR_MODULE}" run < /dev/null 2>&1)" || code_as="$?"
+if [[ "${code_as}" -eq 0 ]]; then
+  pass "audio-repair healthy chain exits 0"
+else
+  fail "audio-repair healthy chain exits 0 (got ${code_as})"
+fi
+if printf '%s\n' "${output_as}" | grep -q "the output chain looks healthy"; then
+  pass "audio-repair healthy chain verdict says the output chain looks healthy"
+else
+  fail "audio-repair healthy chain verdict says the output chain looks healthy"
+fi
+if [[ ! -e "${AR_AS_HOME}/${AR_STATE_REL}" ]]; then
+  pass "audio-repair healthy chain writes no state file"
+else
+  fail "audio-repair healthy chain writes no state file"
+fi
+if [[ ! -s "${AS_ELEV}" ]]; then
+  pass "audio-repair healthy chain makes no elevated call"
+else
+  fail "audio-repair healthy chain makes no elevated call"
+fi
+if [[ ! -f "${AS_AMIXER_LOG}" ]] || ! grep -q "sset" "${AS_AMIXER_LOG}"; then
+  pass "audio-repair healthy chain never writes to the mixer"
+else
+  fail "audio-repair healthy chain never writes to the mixer"
+fi
+
+# Stage (at): dummy sink only + kernel-log driver evidence.
+printf 'Stage at: audio-repair driver/firmware verdict\n'
+AR_AT_HOME="${TMPBASE}/ar-home-at"
+AR_AT_MIXER="${TMPBASE}/ar-mixer-at.txt"
+mkdir -p "${AR_AT_HOME}"
+printf 'muted=0\nvolume=74\n' > "${AR_AT_MIXER}"
+AT_ELEV="${TMPBASE}/ar-at-elevated.log"
+AT_AMIXER_LOG="${TMPBASE}/ar-at-amixer.log"
+output_at=""
+code_at="0"
+output_at="$(PATH="${AR_BIN_DMESG}" HOME="${AR_AT_HOME}" \
+  PACTL_STUB_SINKS_MODE=dummy \
+  AMIXER_STUB_STATE="${AR_AT_MIXER}" AMIXER_STUB_LOG="${AT_AMIXER_LOG}" \
+  ELEVATED_STUB_LOG="${AT_ELEV}" \
+  bash "${AR_MODULE}" run < /dev/null 2>&1)" || code_at="$?"
+if [[ "${code_at}" -eq 0 ]]; then
+  pass "audio-repair driver/firmware path exits 0 (verdict delivered)"
+else
+  fail "audio-repair driver/firmware path exits 0 (got ${code_at})"
+fi
+if printf '%s\n' "${output_at}" | grep -qi "newer kernel" \
+  && printf '%s\n' "${output_at}" | grep -qi "firmware"; then
+  pass "audio-repair driver/firmware verdict names the newer-kernel/firmware fix"
+else
+  fail "audio-repair driver/firmware verdict names the newer-kernel/firmware fix"
+fi
+if printf '%s\n' "${output_at}" | grep -q "sof-audio"; then
+  pass "audio-repair driver/firmware output shows at least one evidence line"
+else
+  fail "audio-repair driver/firmware output shows at least one evidence line"
+fi
+if [[ ! -e "${AR_AT_HOME}/${AR_STATE_REL}" ]]; then
+  pass "audio-repair driver/firmware path writes no state file"
+else
+  fail "audio-repair driver/firmware path writes no state file"
+fi
+if grep -q "sudo dmesg" "${AT_ELEV}"; then
+  pass "audio-repair driver/firmware path went through the elevated dmesg call"
+else
+  fail "audio-repair driver/firmware path went through the elevated dmesg call"
+fi
+if [[ ! -f "${AT_AMIXER_LOG}" ]] || ! grep -q "sset" "${AT_AMIXER_LOG}"; then
+  pass "audio-repair driver/firmware path never writes to the mixer"
+else
+  fail "audio-repair driver/firmware path never writes to the mixer"
+fi
+
+# Stage (au): muted Master at 0% — scripted stdin y accepts the repair.
+printf 'Stage au: audio-repair muted Master repair (confirm yes)\n'
+AR_AU_HOME="${TMPBASE}/ar-home-au"
+AR_AU_MIXER="${TMPBASE}/ar-mixer-au.txt"
+mkdir -p "${AR_AU_HOME}"
+printf 'muted=1\nvolume=0\n' > "${AR_AU_MIXER}"
+AU_AMIXER_LOG="${TMPBASE}/ar-au-amixer.log"
+output_au=""
+code_au="0"
+output_au="$(printf 'y\n' | PATH="${AR_BIN_MAIN}" HOME="${AR_AU_HOME}" \
+  PACTL_STUB_LOG="${TMPBASE}/ar-au-pactl.log" \
+  AMIXER_STUB_STATE="${AR_AU_MIXER}" AMIXER_STUB_LOG="${AU_AMIXER_LOG}" \
+  ELEVATED_STUB_LOG="${TMPBASE}/ar-au-elevated.log" \
+  bash "${AR_MODULE}" run 2>&1)" || code_au="$?"
+if [[ "${code_au}" -eq 0 ]]; then
+  pass "audio-repair muted repair exits 0"
+else
+  fail "audio-repair muted repair exits 0 (got ${code_au})"
+fi
+if printf '%s\n' "${output_au}" | grep -q "current:" \
+  && printf '%s\n' "${output_au}" | grep -q "proposed:"; then
+  pass "audio-repair repair offer shows current-vs-proposed before confirming"
+else
+  fail "audio-repair repair offer shows current-vs-proposed before confirming"
+fi
+AU_STATE="${AR_AU_HOME}/${AR_STATE_REL}"
+if [[ -f "${AU_STATE}" ]] \
+  && grep -q "^muted=1$" "${AU_STATE}" \
+  && grep -q "^volume=0$" "${AU_STATE}"; then
+  pass "audio-repair repair records the prior muted=1 volume=0 state"
+else
+  fail "audio-repair repair records the prior muted=1 volume=0 state"
+fi
+if grep -q "sset Master 100% unmute" "${AU_AMIXER_LOG}"; then
+  pass "audio-repair repair applies amixer -q sset Master 100% unmute"
+else
+  fail "audio-repair repair applies amixer -q sset Master 100% unmute"
+fi
+if grep -q "^muted=0$" "${AR_AU_MIXER}" && grep -q "^volume=100$" "${AR_AU_MIXER}"; then
+  pass "audio-repair repair leaves the stub mixer unmuted at 100%"
+else
+  fail "audio-repair repair leaves the stub mixer unmuted at 100%"
+fi
+if printf '%s\n' "${output_au}" | grep -qi "undo"; then
+  pass "audio-repair repair output points at undo for the recorded state"
+else
+  fail "audio-repair repair output points at undo for the recorded state"
+fi
+
+# Stage (av): undo after (au). The stub mixer is flipped back to muted/0
+# first (something else changed it after the repair), so the undo must
+# restore strictly from the RECORDED values, not from a fresh read.
+printf 'Stage av: audio-repair undo restores the recorded state\n'
+printf 'muted=1\nvolume=0\n' > "${AR_AU_MIXER}"
+AV_AMIXER_LOG="${TMPBASE}/ar-av-amixer.log"
+output_av=""
+code_av="0"
+output_av="$(PATH="${AR_BIN_MAIN}" HOME="${AR_AU_HOME}" \
+  AMIXER_STUB_STATE="${AR_AU_MIXER}" AMIXER_STUB_LOG="${AV_AMIXER_LOG}" \
+  bash "${AR_MODULE}" undo < /dev/null 2>&1)" || code_av="$?"
+if [[ "${code_av}" -eq 0 ]]; then
+  pass "audio-repair undo exits 0"
+else
+  fail "audio-repair undo exits 0 (got ${code_av})"
+fi
+if grep -q "sset Master 0%" "${AV_AMIXER_LOG}"; then
+  pass "audio-repair undo re-applies the recorded volume (0%)"
+else
+  fail "audio-repair undo re-applies the recorded volume (0%)"
+fi
+if grep -q "sset Master mute" "${AV_AMIXER_LOG}"; then
+  pass "audio-repair undo re-applies the recorded mute flag"
+else
+  fail "audio-repair undo re-applies the recorded mute flag"
+fi
+if [[ ! -e "${AU_STATE}" ]]; then
+  pass "audio-repair undo deletes the state record"
+else
+  fail "audio-repair undo deletes the state record"
+fi
+output_av2=""
+code_av2="0"
+output_av2="$(PATH="${AR_BIN_MAIN}" HOME="${AR_AU_HOME}" \
+  AMIXER_STUB_STATE="${AR_AU_MIXER}" \
+  bash "${AR_MODULE}" undo < /dev/null 2>&1)" || code_av2="$?"
+if [[ "${code_av2}" -eq 0 ]] && printf '%s\n' "${output_av2}" | grep -qi "Nothing to undo."; then
+  pass "audio-repair second undo reports Nothing to undo and exits 0"
+else
+  fail "audio-repair second undo reports Nothing to undo and exits 0 (got ${code_av2})"
+fi
+
+# Stage (aw): confirm-no on the muted fixture, then the elevated-failure
+# path with a refusing sudo.
+printf 'Stage aw: audio-repair confirm-no and elevated failure\n'
+AR_AW_HOME="${TMPBASE}/ar-home-aw"
+AR_AW_MIXER="${TMPBASE}/ar-mixer-aw.txt"
+mkdir -p "${AR_AW_HOME}"
+printf 'muted=1\nvolume=0\n' > "${AR_AW_MIXER}"
+AW_AMIXER_LOG="${TMPBASE}/ar-aw-amixer.log"
+output_aw=""
+code_aw="0"
+output_aw="$(printf 'n\n' | PATH="${AR_BIN_MAIN}" HOME="${AR_AW_HOME}" \
+  AMIXER_STUB_STATE="${AR_AW_MIXER}" AMIXER_STUB_LOG="${AW_AMIXER_LOG}" \
+  bash "${AR_MODULE}" run 2>&1)" || code_aw="$?"
+if [[ "${code_aw}" -eq 0 ]]; then
+  pass "audio-repair confirm-no exits 0"
+else
+  fail "audio-repair confirm-no exits 0 (got ${code_aw})"
+fi
+if printf '%s\n' "${output_aw}" | grep -q "Nothing changed."; then
+  pass "audio-repair confirm-no prints Nothing changed."
+else
+  fail "audio-repair confirm-no prints Nothing changed."
+fi
+if [[ ! -e "${AR_AW_HOME}/${AR_STATE_REL}" ]]; then
+  pass "audio-repair confirm-no writes no state"
+else
+  fail "audio-repair confirm-no writes no state"
+fi
+if [[ ! -f "${AW_AMIXER_LOG}" ]] || ! grep -q "sset" "${AW_AMIXER_LOG}"; then
+  pass "audio-repair confirm-no never touches the mixer"
+else
+  fail "audio-repair confirm-no never touches the mixer"
+fi
+
+AR_AW2_HOME="${TMPBASE}/ar-home-aw2"
+AR_AW2_HOME_BEFORE="${TMPBASE}/ar-home-aw2-before"
+AR_AW2_MIXER="${TMPBASE}/ar-mixer-aw2.txt"
+mkdir -p "${AR_AW2_HOME}"
+cp -a "${AR_AW2_HOME}" "${AR_AW2_HOME_BEFORE}"
+printf 'muted=0\nvolume=74\n' > "${AR_AW2_MIXER}"
+code_aw2="0"
+AR_AW2_STDERR="${TMPBASE}/ar-aw2.stderr"
+PACTL_STUB_SINKS_MODE=dummy PATH="${AR_BIN_FAIL}" HOME="${AR_AW2_HOME}" \
+  AMIXER_STUB_STATE="${AR_AW2_MIXER}" \
+  bash "${AR_MODULE}" run < /dev/null >/dev/null 2>"${AR_AW2_STDERR}" || code_aw2="$?"
+stderr_aw2="$(cat "${AR_AW2_STDERR}")"
+if [[ "${code_aw2}" -ne 0 ]]; then
+  pass "audio-repair elevated failure exits non-zero (got ${code_aw2})"
+else
+  fail "audio-repair elevated failure exits non-zero"
+fi
+aw2_module_lines="$(printf '%s\n' "${stderr_aw2}" | grep -v '^sudo-stub:' | grep -c . || true)"
+if [[ "${aw2_module_lines}" -eq 1 ]]; then
+  pass "audio-repair elevated failure prints one plain stderr line"
+else
+  fail "audio-repair elevated failure prints one plain stderr line (got ${aw2_module_lines} lines: ${stderr_aw2})"
+fi
+if diff -r "${AR_AW2_HOME}" "${AR_AW2_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "audio-repair elevated failure writes nothing to the fake HOME"
+else
+  fail "audio-repair elevated failure modified the fake HOME"
+fi
+
 
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
