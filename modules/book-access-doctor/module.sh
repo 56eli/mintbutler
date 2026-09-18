@@ -235,8 +235,8 @@ plan() {
   printf '4. Report every mount plainly: target, source, filesystem, ro or rw, writable or\n'
   printf '   not. All rw and writable -> healthy verdict; nothing asked, nothing changed.\n'
   printf '5. A read-only mount -> ONE repair, and only for these filesystem types:\n'
-  printf '   %s. A read-only medium such\n' "$(remountable_list)"
-  printf '   as iso9660 earns an honest "remounting rw does not apply" verdict instead.\n'
+  printf '   %s. A read-only medium such as\n' "$(remountable_list)"
+  printf '   iso9660 earns an honest "remounting rw does not apply" verdict instead.\n'
   printf '   Otherwise: show current versus proposed and the exact elevated command, ask\n'
   printf '   ONE confirmation; on yes only: record, remount read-write, verify, report.\n'
   printf '6. Undo remounts the recorded target read-only again, then deletes the record.\n'
@@ -343,7 +343,7 @@ run() {
     current_word="mounted read-only (ro), though the mount point answers as writable"
   fi
 
-  printf '\nThe read-only mount is the repairable culprit here:\n'
+  printf '\nThis mount is the repairable culprit here:\n'
   printf '  current:  %s — %s, %s from %s\n' "${target}" "${current_word}" "${fstype}" "${source}"
   printf '  proposed: the same mount remounted read-write (rw); nothing else about it changes\n'
   printf '  command:  %s\n' "$(elevate_command_line "mount -o remount,rw '${target}'")"
