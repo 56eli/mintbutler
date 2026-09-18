@@ -1,0 +1,13 @@
+title: Book access doctor
+description: >-
+  Diagnoses removable mounts under /media and /run/media — where Mint automounts
+  e-readers and book devices — reporting source, filesystem, options, and
+  writability in plain words. The one repair it makes on a read-only mount is an
+  elevated remount read-write, confirmed first, recorded, and restorable on undo;
+  persistent-mount guidance is print-only — fstab is never written and chmod
+  never runs.
+risk: elevated
+undo: true
+needs: [findmnt, mount]
+asks: 1
+order: 900
