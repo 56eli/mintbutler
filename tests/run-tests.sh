@@ -4991,6 +4991,971 @@ else
 fi
 
 
+# ---------------------------------------------------------------------------
+# Stages (bm)-(br): book-access-doctor (elevated, diagnose-first) — stub-only
+# verification. Every stage runs with a controlled PATH (stub findmnt/mount/sudo
+# plus symlinks to the coreutils the module and its lib helpers need) and a fake
+# HOME under mktemp. No stage ever invokes real findmnt, real mount, or real
+# sudo, and no stage ever remounts anything: the stub mount only flips the ro/rw
+# option token of a canned mount table, and the stub sudo runs its command
+# without privilege. Where the module's interactive confirmation matters, stages
+# drive the module binary directly with piped stdin (the menu path cannot script
+# elevated confirmation). The writability probe runs against a stand-in root via
+# the module's MINTBUTLER_MOUNT_PROBE_ROOT seam, because a harness cannot create
+# root-owned /media/... mount points; unset, the probe is `test -w "<target>"`.
+# ---------------------------------------------------------------------------
+
+BK_MODULE="${REPO_ROOT}/modules/book-access-doctor/module.sh"
+BK_STUB_ROOT="${TMPBASE}/bk-stubs"
+BK_STATE_REL=".local/state/mintbutler/book-access-doctor/remount.record"
+BK_TARGET_RO="/media/user/KINDLE"
+mkdir -p "${BK_STUB_ROOT}"
+
+# Canned mount-table rows (target|source|fstype|options), shared by the findmnt
+# and mount stubs as their state file.
+BK_ROW_ROOT='/|/dev/nvme0n1p2|ext4|rw,relatime,discard,errors=remount-ro'
+BK_ROW_RO_VFAT='/media/user/KINDLE|/dev/sdb1|vfat|ro,nosuid,nodev,relatime,uid=1000,gid=1000,dmask=022,fmask=133'
+BK_ROW_RW_VFAT='/media/user/KOBO|/dev/sdc1|vfat|rw,nosuid,nodev,relatime,uid=1000,gid=1000'
+BK_ROW_RO_ISO='/media/user/BOOKDISC|/dev/sr0|iso9660|ro,nosuid,nodev,noexec,relatime'
+
+# Controlled-PATH builder: symlink the coreutils the module (and the lib helpers
+# it sources) needs from the host; each stage's bin dir then gets only the stubs
+# that stage wants present.
+bk_make_bin() {
+  local dir="${1:-}"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in dirname sed mkdir rm rmdir mv bash date tr grep cut awk; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  printf '%s\n' "${dir}"
+}
+
+# Stub findmnt: reads the canned mount table and answers exactly the two
+# invocations the module makes. Discovery rows carry real findmnt's tree
+# decoration, so the module's row parser is exercised the way Mint presents it.
+#   MOUNT_STUB_TABLE  : the canned table (target|source|fstype|options)
+#   FINDMNT_STUB_LOG  : when set, every invocation is appended to it
+#   FINDMNT_STUB_FAIL : 1 makes discovery fail like an unreadable mount table
+cat <<'BK_FINDMNT_STUB' > "${BK_STUB_ROOT}/findmnt"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${FINDMNT_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'findmnt%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+TABLE="${MOUNT_STUB_TABLE:?findmnt-stub: MOUNT_STUB_TABLE is not set}"
+cols=""
+target=""
+while [[ "$#" -gt 0 ]]; do
+  case "${1}" in
+    -o)
+      cols="${2:-}"
+      shift
+      ;;
+    -*)
+      ;;
+    *)
+      target="${1}"
+      ;;
+  esac
+  shift
+done
+if [[ "${cols}" == "TARGET,SOURCE,FSTYPE,OPTIONS" && -z "${target}" ]]; then
+  if [[ "${FINDMNT_STUB_FAIL:-0}" == "1" ]]; then
+    printf 'findmnt-stub: could not read the mount table\n' >&2
+    exit 1
+  fi
+  total="$(grep -c . "${TABLE}" || true)"
+  n=0
+  while IFS='|' read -r t s f o; do
+    if [[ -z "${t}" ]]; then
+      continue
+    fi
+    n=$((n + 1))
+    if [[ "${n}" -lt "${total}" ]]; then
+      printf '|-%s %s %s %s\n' "${t}" "${s}" "${f}" "${o}"
+    else
+      printf '`-%s %s %s %s\n' "${t}" "${s}" "${f}" "${o}"
+    fi
+  done < "${TABLE}"
+  exit 0
+fi
+if [[ "${cols}" == "OPTIONS" && -n "${target}" ]]; then
+  while IFS='|' read -r t s f o; do
+    if [[ "${t}" == "${target}" ]]; then
+      printf '%s\n' "${o}"
+      exit 0
+    fi
+  done < "${TABLE}"
+  printf 'findmnt-stub: not mounted: %s\n' "${target}" >&2
+  exit 1
+fi
+printf 'findmnt-stub: unsupported invocation: %s\n' "$*" >&2
+exit 2
+BK_FINDMNT_STUB
+
+# Stub mount: the ONLY calls it accepts are `mount -o remount,rw <target>` and
+# `mount -o remount,ro <target>`, which flip that row's ro/rw option token in
+# the shared canned table. Anything else is refused, so no stage can ever mount,
+# unmount, or remount something real.
+#   MOUNT_STUB_LOG  : when set, every invocation is appended to it
+#   MOUNT_STUB_FAIL : 1 makes every remount fail (exit 1), like a device that
+#                     dropped off the bus or a filesystem that refuses rw
+cat <<'BK_MOUNT_STUB' > "${BK_STUB_ROOT}/mount"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${MOUNT_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'mount%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+TABLE="${MOUNT_STUB_TABLE:?mount-stub: MOUNT_STUB_TABLE is not set}"
+mode=""
+target=""
+if [[ "${1:-}" == "-o" ]]; then
+  case "${2:-}" in
+    remount,rw) mode="rw" ;;
+    remount,ro) mode="ro" ;;
+  esac
+  target="${3:-}"
+fi
+if [[ -z "${mode}" || -z "${target}" ]]; then
+  printf 'mount-stub: unsupported invocation: %s\n' "$*" >&2
+  exit 2
+fi
+if [[ "${MOUNT_STUB_FAIL:-0}" == "1" ]]; then
+  printf 'mount-stub: refused %s\n' "$*" >&2
+  exit 1
+fi
+tmp="${TABLE}.new"
+: > "${tmp}"
+found=0
+while IFS='|' read -r t s f o; do
+  if [[ -z "${t}" ]]; then
+    continue
+  fi
+  if [[ "${t}" == "${target}" ]]; then
+    found=1
+    newo=""
+    parts=()
+    IFS=',' read -r -a parts <<< "${o}"
+    for p in "${parts[@]}"; do
+      if [[ "${mode}" == "rw" && "${p}" == "ro" ]]; then
+        p="rw"
+      elif [[ "${mode}" == "ro" && "${p}" == "rw" ]]; then
+        p="ro"
+      fi
+      if [[ -z "${newo}" ]]; then
+        newo="${p}"
+      else
+        newo="${newo},${p}"
+      fi
+    done
+    o="${newo}"
+  fi
+  printf '%s|%s|%s|%s\n' "${t}" "${s}" "${f}" "${o}" >> "${tmp}"
+done < "${TABLE}"
+if [[ "${found}" -ne 1 ]]; then
+  rm -f "${tmp}"
+  printf 'mount-stub: not mounted: %s\n' "${target}" >&2
+  exit 1
+fi
+mv "${tmp}" "${TABLE}"
+exit 0
+BK_MOUNT_STUB
+
+# Stub sudo (passthrough): logs the elevated call to ELEVATED_STUB_LOG, then
+# runs its command — the remount path executes the stub mount through this,
+# mirroring the real lib/elevate.sh flow with no privilege and no real remount.
+cat <<'BK_SUDO_PASS_STUB' > "${BK_STUB_ROOT}/sudo-pass"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${ELEVATED_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'sudo%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+exec "$@"
+BK_SUDO_PASS_STUB
+
+chmod +x "${BK_STUB_ROOT}/findmnt" "${BK_STUB_ROOT}/mount" "${BK_STUB_ROOT}/sudo-pass"
+
+# Bin dir with only coreutils: no findmnt/mount at all — the preflight path.
+BK_BIN_EMPTY="${BK_STUB_ROOT}/bin-empty"
+bk_make_bin "${BK_BIN_EMPTY}" >/dev/null
+
+# Bin dir for every diagnosed path: stub findmnt + stub mount + passthrough sudo.
+BK_BIN_MAIN="${BK_STUB_ROOT}/bin-main"
+bk_make_bin "${BK_BIN_MAIN}" >/dev/null
+cp "${BK_STUB_ROOT}/findmnt" "${BK_STUB_ROOT}/mount" "${BK_BIN_MAIN}/"
+cp "${BK_STUB_ROOT}/sudo-pass" "${BK_BIN_MAIN}/sudo"
+
+# bk_stderr_lines FILE — the module's own stderr line count, with the stub
+# noise and the [y/N] prompt (which ask_yn writes without a newline, so a stub
+# error can share its line) filtered out.
+bk_stderr_lines() {
+  local file="${1:-}"
+  if [[ ! -f "${file}" ]]; then
+    printf '0\n'
+    return 0
+  fi
+  sed -e 's/^.*\[y\/N\]: //' "${file}" | grep -v '^mount-stub:' | grep -v '^findmnt-stub:' | grep -c . || true
+}
+
+# Stage (bm): gate + read-only smokes in the real repo.
+printf 'Stage bm: book-access-doctor gate, scan, list badge, plan/dry-run, missing preflight\n'
+
+output_bm_scan=""
+code_bm_scan="0"
+output_bm_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_bm_scan="$?"
+if [[ "${code_bm_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with book-access-doctor present (got ${code_bm_scan})"
+else
+  pass "butler --scan exits 0 with book-access-doctor present"
+fi
+if printf '%s\n' "${output_bm_scan}" | grep -q "PASS book-access-doctor"; then
+  pass "butler --scan reports PASS book-access-doctor"
+else
+  fail "butler --scan reports PASS book-access-doctor"
+fi
+
+output_bm_lint1=""
+code_bm_lint1="0"
+output_bm_lint1="$(cd "${REPO_ROOT}" && bin/modulelint book-access-doctor 2>&1)" || code_bm_lint1="$?"
+if [[ "${code_bm_lint1}" -ne 0 ]]; then
+  fail "bin/modulelint book-access-doctor exits 0 (got ${code_bm_lint1})"
+else
+  pass "bin/modulelint book-access-doctor exits 0"
+fi
+if printf '%s\n' "${output_bm_lint1}" | grep -q "PASS book-access-doctor"; then
+  pass "bin/modulelint book-access-doctor contains PASS book-access-doctor"
+else
+  fail "bin/modulelint book-access-doctor contains PASS book-access-doctor"
+fi
+
+code_bm_lint="0"
+(cd "${REPO_ROOT}" && bin/modulelint >/dev/null 2>&1) || code_bm_lint="$?"
+if [[ "${code_bm_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 over all modules with book-access-doctor present (got ${code_bm_lint})"
+else
+  pass "bin/modulelint exits 0 over all modules with book-access-doctor present"
+fi
+
+output_bm_list=""
+code_bm_list="0"
+output_bm_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_bm_list="$?"
+if [[ "${code_bm_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_bm_list})"
+else
+  pass "butler --list exits 0"
+fi
+bk_bm_list_line="$(printf '%s\n' "${output_bm_list}" | grep -- "book-access-doctor: Book access doctor" || true)"
+if [[ -n "${bk_bm_list_line}" ]]; then
+  pass "butler --list shows book-access-doctor: Book access doctor"
+else
+  fail "butler --list shows book-access-doctor: Book access doctor"
+fi
+if [[ "${bk_bm_list_line}" == *"⚠ elevated"* ]]; then
+  pass "butler --list shows the elevated badge on book-access-doctor"
+else
+  fail "butler --list shows the elevated badge on book-access-doctor"
+fi
+if printf '%s\n' "${output_bm_list}" | grep -q "system-report-pack" \
+  && printf '%s\n' "${output_bm_list}" | grep -q "audio-repair" \
+  && printf '%s\n' "${output_bm_list}" | grep -q "desktop-shortcut-creator"; then
+  pass "butler --list still shows the earlier modules"
+else
+  fail "butler --list still shows the earlier modules"
+fi
+
+# Menu position smoke: with the current module set, order 900 renders as entry 9
+# (positions are recomputed at scan time), ahead of audio-repair at order 910,
+# and it carries the elevated badge.
+output_bm_menu=""
+code_bm_menu="0"
+output_bm_menu="$(printf 'q\n' | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || code_bm_menu="$?"
+bk_bm_menu_line="$(printf '%s\n' "${output_bm_menu}" | grep -F "9) Book access doctor" || true)"
+if [[ "${code_bm_menu}" -eq 0 && -n "${bk_bm_menu_line}" && "${bk_bm_menu_line}" == *"⚠ elevated"* ]]; then
+  pass "menu renders Book access doctor at its order-900 position with the elevated badge"
+else
+  fail "menu renders Book access doctor at its order-900 position with the elevated badge (got ${code_bm_menu}: ${bk_bm_menu_line})"
+fi
+if printf '%s\n' "${output_bm_menu}" | grep -Fq "10) Audio repair"; then
+  pass "menu still renders Audio repair after the order-900 fix"
+else
+  fail "menu still renders Audio repair after the order-900 fix"
+fi
+
+# Menu navigation, elevated + undoable: the detail screen offers
+# [d]ry-run/[r]un/[u]ndo/[b]ack and names the risk. Scripted stdin: /book
+# filters to the module, 1 opens its detail screen, b goes back, q quits.
+output_bm_nav=""
+code_bm_nav="0"
+output_bm_nav="$(printf '/book\n1\nb\nq\n' | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || code_bm_nav="$?"
+if [[ "${code_bm_nav}" -ne 0 ]]; then
+  fail "menu navigation through the book-access-doctor detail screen exits 0 (got ${code_bm_nav})"
+else
+  pass "menu navigation through the book-access-doctor detail screen exits 0"
+fi
+if printf '%s\n' "${output_bm_nav}" | grep -Fq "[d]ry-run  [r]un  [u]ndo  [b]ack"; then
+  pass "detail screen offers dry-run/run/undo/back"
+else
+  fail "detail screen offers dry-run/run/undo/back"
+fi
+if printf '%s\n' "${output_bm_nav}" | grep -q "Risk: elevated" \
+  && printf '%s\n' "${output_bm_nav}" | grep -q "Undo: available"; then
+  pass "detail screen states the elevated risk and that undo is available"
+else
+  fail "detail screen states the elevated risk and that undo is available"
+fi
+
+BK_BM_HOME="${TMPBASE}/bk-home-bm"
+BK_BM_HOME_BEFORE="${TMPBASE}/bk-home-bm-before"
+mkdir -p "${BK_BM_HOME}"
+cp -a "${BK_BM_HOME}" "${BK_BM_HOME_BEFORE}"
+
+output_bm_plan=""
+code_bm_plan="0"
+output_bm_plan="$(HOME="${BK_BM_HOME}" XDG_STATE_HOME="" bash "${BK_MODULE}" plan < /dev/null 2>&1)" || code_bm_plan="$?"
+bk_bm_plan_lines="$(printf '%s\n' "${output_bm_plan}" | grep -c . || true)"
+if [[ "${code_bm_plan}" -eq 0 && -n "${output_bm_plan}" ]]; then
+  pass "book-access-doctor plan exits 0 and non-empty"
+else
+  fail "book-access-doctor plan exits 0 and non-empty (got ${code_bm_plan})"
+fi
+if [[ "${bk_bm_plan_lines}" -le 23 ]]; then
+  pass "book-access-doctor plan renders in <= 23 lines (got ${bk_bm_plan_lines})"
+else
+  fail "book-access-doctor plan renders in <= 23 lines (got ${bk_bm_plan_lines})"
+fi
+if printf '%s\n' "${output_bm_plan}" | grep -Fq "never writes /etc/fstab" \
+  && printf '%s\n' "${output_bm_plan}" | grep -Fq "never runs chmod"; then
+  pass "book-access-doctor plan carries the never-fstab-write and never-chmod statements"
+else
+  fail "book-access-doctor plan carries the never-fstab-write and never-chmod statements"
+fi
+
+output_bm_dry=""
+code_bm_dry="0"
+output_bm_dry="$(HOME="${BK_BM_HOME}" XDG_STATE_HOME="" bash "${BK_MODULE}" dry-run < /dev/null 2>&1)" || code_bm_dry="$?"
+bk_bm_dry_lines="$(printf '%s\n' "${output_bm_dry}" | grep -c . || true)"
+if [[ "${code_bm_dry}" -eq 0 && -n "${output_bm_dry}" ]]; then
+  pass "book-access-doctor dry-run exits 0 and non-empty"
+else
+  fail "book-access-doctor dry-run exits 0 and non-empty (got ${code_bm_dry})"
+fi
+if [[ "${bk_bm_dry_lines}" -le 23 ]]; then
+  pass "book-access-doctor dry-run renders in <= 23 lines (got ${bk_bm_dry_lines})"
+else
+  fail "book-access-doctor dry-run renders in <= 23 lines (got ${bk_bm_dry_lines})"
+fi
+# The elevated commands are rendered by lib/elevate.sh's display helper from a
+# quoted-placeholder command string, never from a hardcoded display line.
+if printf '%s\n' "${output_bm_dry}" | grep -Fq "mount -o remount,rw '<target>'" \
+  && printf '%s\n' "${output_bm_dry}" | grep -Fq "mount -o remount,ro '<target>'"; then
+  pass "book-access-doctor dry-run shows both remount commands via the helper display"
+else
+  fail "book-access-doctor dry-run shows both remount commands via the helper display"
+fi
+if printf '%s\n' "${output_bm_dry}" | grep -Fq "never writes /etc/fstab" \
+  && printf '%s\n' "${output_bm_dry}" | grep -Fq "never runs chmod"; then
+  pass "book-access-doctor dry-run carries the never-fstab-write and never-chmod statements"
+else
+  fail "book-access-doctor dry-run carries the never-fstab-write and never-chmod statements"
+fi
+if diff -r "${BK_BM_HOME}" "${BK_BM_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "book-access-doctor plan and dry-run write nothing to the fake HOME"
+else
+  fail "book-access-doctor plan and dry-run modified the fake HOME"
+fi
+
+# Menu-flag smoke (owner acceptance command): --run <slug> --dry-run is
+# non-destructive.
+code_bm_menudry="0"
+HOME="${BK_BM_HOME}" XDG_STATE_HOME="" bash -c 'cd "'"${REPO_ROOT}"'" && ./butler --run book-access-doctor --dry-run' >/dev/null 2>&1 || code_bm_menudry="$?"
+if [[ "${code_bm_menudry}" -eq 0 ]]; then
+  pass "butler --run book-access-doctor --dry-run exits 0"
+else
+  fail "butler --run book-access-doctor --dry-run exits 0 (got ${code_bm_menudry})"
+fi
+if diff -r "${BK_BM_HOME}" "${BK_BM_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "butler --run book-access-doctor --dry-run leaves the fake HOME untouched"
+else
+  fail "butler --run book-access-doctor --dry-run modified the fake HOME"
+fi
+
+# Missing-tools preflight (modulelint compatibility): stdin /dev/null and no
+# findmnt/mount on PATH -> exit 1, one plain stderr line, empty stdout, fake
+# HOME byte-identical.
+BK_BM2_HOME="${TMPBASE}/bk-home-bm2"
+BK_BM2_HOME_BEFORE="${TMPBASE}/bk-home-bm2-before"
+BK_BM2_STDOUT="${TMPBASE}/bk-bm2.stdout"
+BK_BM2_STDERR="${TMPBASE}/bk-bm2.stderr"
+mkdir -p "${BK_BM2_HOME}"
+cp -a "${BK_BM2_HOME}" "${BK_BM2_HOME_BEFORE}"
+code_bm_run="0"
+PATH="${BK_BIN_EMPTY}" HOME="${BK_BM2_HOME}" XDG_STATE_HOME="" \
+  bash "${BK_MODULE}" run < /dev/null >"${BK_BM2_STDOUT}" 2>"${BK_BM2_STDERR}" || code_bm_run="$?"
+if [[ "${code_bm_run}" -eq 1 ]]; then
+  pass "book-access-doctor missing-tools preflight exits 1 (got ${code_bm_run})"
+else
+  fail "book-access-doctor missing-tools preflight exits 1 (got ${code_bm_run})"
+fi
+bm2_stderr_lines="$(bk_stderr_lines "${BK_BM2_STDERR}")"
+if [[ "${bm2_stderr_lines}" -eq 1 ]] && grep -q "Mount tools missing" "${BK_BM2_STDERR}"; then
+  pass "book-access-doctor missing-tools preflight prints one plain stderr line"
+else
+  fail "book-access-doctor missing-tools preflight prints one plain stderr line (got ${bm2_stderr_lines}: $(cat "${BK_BM2_STDERR}"))"
+fi
+if [[ ! -s "${BK_BM2_STDOUT}" ]]; then
+  pass "book-access-doctor missing-tools preflight prints nothing to stdout"
+else
+  fail "book-access-doctor missing-tools preflight printed to stdout: $(cat "${BK_BM2_STDOUT}")"
+fi
+if diff -r "${BK_BM2_HOME}" "${BK_BM2_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "book-access-doctor missing-tools preflight writes nothing to the fake HOME"
+else
+  fail "book-access-doctor missing-tools preflight modified the fake HOME"
+fi
+
+# Source assertions: no permission-changing invocation of any kind (chmod/chown
+# may appear only inside printf display text — the plan's never-chmod
+# statement), no privilege token anywhere (the privileged prefix lives only in
+# lib/elevate.sh), no eval, and no fstab write path (/etc/fstab may appear only
+# inside printf display text — the informational guidance).
+bk_bm_chmod_lines="$(grep -n -w -E 'chmod|chown' "${BK_MODULE}" | grep -v 'printf' || true)"
+if [[ -z "${bk_bm_chmod_lines}" ]]; then
+  pass "book-access-doctor source makes no chmod/chown invocation"
+else
+  fail "book-access-doctor source makes no chmod/chown invocation (got: ${bk_bm_chmod_lines})"
+fi
+if grep -w -E -q 'sudo|pkexec' "${BK_MODULE}"; then
+  fail "book-access-doctor source contains no sudo/pkexec literal"
+else
+  pass "book-access-doctor source contains no sudo/pkexec literal"
+fi
+if grep -w -q 'eval' "${BK_MODULE}"; then
+  fail "book-access-doctor source contains no eval"
+else
+  pass "book-access-doctor source contains no eval"
+fi
+bk_bm_fstab_lines="$(grep -n -F '/etc/fstab' "${BK_MODULE}" | grep -v 'printf' || true)"
+if [[ -z "${bk_bm_fstab_lines}" ]]; then
+  pass "book-access-doctor mentions /etc/fstab only in informational display strings"
+else
+  fail "book-access-doctor mentions /etc/fstab only in informational display strings (got: ${bk_bm_fstab_lines})"
+fi
+if grep -F -q 'lib/elevate.sh' "${BK_MODULE}" && grep -F -q 'lib/ask.sh' "${BK_MODULE}"; then
+  pass "book-access-doctor reaches privilege only through lib/elevate.sh and asks through lib/ask.sh"
+else
+  fail "book-access-doctor reaches privilege only through lib/elevate.sh and asks through lib/ask.sh"
+fi
+bk_bm_ask_count="$(grep -c -E '^[^#]*ask_(yn|value) ' "${BK_MODULE}" || true)"
+if [[ "${bk_bm_ask_count}" -eq 1 ]]; then
+  pass "book-access-doctor asks exactly one question (manifest asks: 1)"
+else
+  fail "book-access-doctor asks exactly one question (got ${bk_bm_ask_count})"
+fi
+
+# Stage (bn): no removable mount at all — the canned table holds only the
+# system rows. Exit 0, plug-in/unlock/file-manager guidance plus the Disks-app
+# note, no elevated call, no mount call, nothing written.
+printf 'Stage bn: book-access-doctor no removable mount\n'
+BK_BN_HOME="${TMPBASE}/bk-home-bn"
+BK_BN_HOME_BEFORE="${TMPBASE}/bk-home-bn-before"
+BK_BN_TABLE="${TMPBASE}/bk-table-bn.txt"
+BK_BN_STDOUT="${TMPBASE}/bk-bn.stdout"
+BK_BN_STDERR="${TMPBASE}/bk-bn.stderr"
+BK_BN_FINDMNT_LOG="${TMPBASE}/bk-bn-findmnt.log"
+BK_BN_MOUNT_LOG="${TMPBASE}/bk-bn-mount.log"
+BK_BN_ELEV_LOG="${TMPBASE}/bk-bn-elevated.log"
+mkdir -p "${BK_BN_HOME}"
+cp -a "${BK_BN_HOME}" "${BK_BN_HOME_BEFORE}"
+printf '%s\n' "${BK_ROW_ROOT}" > "${BK_BN_TABLE}"
+code_bn="0"
+PATH="${BK_BIN_MAIN}" HOME="${BK_BN_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BN_TABLE}" FINDMNT_STUB_LOG="${BK_BN_FINDMNT_LOG}" \
+  MOUNT_STUB_LOG="${BK_BN_MOUNT_LOG}" ELEVATED_STUB_LOG="${BK_BN_ELEV_LOG}" \
+  bash "${BK_MODULE}" run < /dev/null >"${BK_BN_STDOUT}" 2>"${BK_BN_STDERR}" || code_bn="$?"
+if [[ "${code_bn}" -eq 0 ]]; then
+  pass "book-access-doctor no-removable-mount path exits 0 (verdict delivered)"
+else
+  fail "book-access-doctor no-removable-mount path exits 0 (got ${code_bn})"
+fi
+if grep -Fq "no removable mount found under /media or /run/media" "${BK_BN_STDOUT}"; then
+  pass "book-access-doctor no-device verdict says no removable mount was found"
+else
+  fail "book-access-doctor no-device verdict says no removable mount was found"
+fi
+if grep -Fq "Plug the reader in and unlock it" "${BK_BN_STDOUT}" \
+  && grep -Fq "file manager" "${BK_BN_STDOUT}" \
+  && grep -Fq "then re-run" "${BK_BN_STDOUT}"; then
+  pass "book-access-doctor no-device guidance names plug-in, unlock, file manager and re-run"
+else
+  fail "book-access-doctor no-device guidance names plug-in, unlock, file manager and re-run"
+fi
+if grep -Fq "Disks app" "${BK_BN_STDOUT}" && grep -Fq "never writes /etc/fstab" "${BK_BN_STDOUT}"; then
+  pass "book-access-doctor no-device guidance points at the Disks app and never-fstab"
+else
+  fail "book-access-doctor no-device guidance points at the Disks app and never-fstab"
+fi
+if [[ ! -s "${BK_BN_ELEV_LOG}" ]]; then
+  pass "book-access-doctor no-device path makes no elevated call"
+else
+  fail "book-access-doctor no-device path makes no elevated call (got: $(cat "${BK_BN_ELEV_LOG}"))"
+fi
+if [[ ! -s "${BK_BN_MOUNT_LOG}" ]]; then
+  pass "book-access-doctor no-device path never calls mount"
+else
+  fail "book-access-doctor no-device path never calls mount (got: $(cat "${BK_BN_MOUNT_LOG}"))"
+fi
+if [[ -f "${BK_BN_FINDMNT_LOG}" ]] && cmp -s "${BK_BN_FINDMNT_LOG}" <(printf 'findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS\n'); then
+  pass "book-access-doctor no-device path makes exactly the one read-only discovery call"
+else
+  fail "book-access-doctor no-device path makes exactly the one read-only discovery call (got: $(cat "${BK_BN_FINDMNT_LOG}" 2>/dev/null))"
+fi
+if diff -r "${BK_BN_HOME}" "${BK_BN_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "book-access-doctor no-device path writes nothing to the fake HOME (byte-identical)"
+else
+  fail "book-access-doctor no-device path modified the fake HOME"
+fi
+if [[ ! -s "${BK_BN_STDERR}" ]]; then
+  pass "book-access-doctor no-device path asks no question (stderr empty)"
+else
+  fail "book-access-doctor no-device path asks no question (got: $(cat "${BK_BN_STDERR}"))"
+fi
+
+# Stage (bo): all healthy — one rw vfat media row whose mount point answers the
+# writability probe. Exit 0 with the healthy verdict, no question, no elevated
+# call, no mount call, nothing written.
+printf 'Stage bo: book-access-doctor healthy mount\n'
+BK_BO_HOME="${TMPBASE}/bk-home-bo"
+BK_BO_HOME_BEFORE="${TMPBASE}/bk-home-bo-before"
+BK_BO_TABLE="${TMPBASE}/bk-table-bo.txt"
+BK_BO_PROBE="${TMPBASE}/bk-probe-bo"
+BK_BO_STDOUT="${TMPBASE}/bk-bo.stdout"
+BK_BO_STDERR="${TMPBASE}/bk-bo.stderr"
+BK_BO_MOUNT_LOG="${TMPBASE}/bk-bo-mount.log"
+BK_BO_ELEV_LOG="${TMPBASE}/bk-bo-elevated.log"
+mkdir -p "${BK_BO_HOME}" "${BK_BO_PROBE}/media/user/KOBO"
+cp -a "${BK_BO_HOME}" "${BK_BO_HOME_BEFORE}"
+printf '%s\n' "${BK_ROW_ROOT}" "${BK_ROW_RW_VFAT}" > "${BK_BO_TABLE}"
+code_bo="0"
+PATH="${BK_BIN_MAIN}" HOME="${BK_BO_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BO_TABLE}" MINTBUTLER_MOUNT_PROBE_ROOT="${BK_BO_PROBE}" \
+  MOUNT_STUB_LOG="${BK_BO_MOUNT_LOG}" ELEVATED_STUB_LOG="${BK_BO_ELEV_LOG}" \
+  bash "${BK_MODULE}" run < /dev/null >"${BK_BO_STDOUT}" 2>"${BK_BO_STDERR}" || code_bo="$?"
+if [[ "${code_bo}" -eq 0 ]]; then
+  pass "book-access-doctor healthy path exits 0"
+else
+  fail "book-access-doctor healthy path exits 0 (got ${code_bo})"
+fi
+if grep -Fq "/media/user/KOBO" "${BK_BO_STDOUT}" \
+  && grep -Fq "mounted read-write (rw)" "${BK_BO_STDOUT}" \
+  && grep -Fq "writable right now" "${BK_BO_STDOUT}"; then
+  pass "book-access-doctor healthy path reports the mount, its rw option and its writability"
+else
+  fail "book-access-doctor healthy path reports the mount, its rw option and its writability"
+fi
+if grep -Fq "/dev/sdc1" "${BK_BO_STDOUT}" && grep -Fq "vfat" "${BK_BO_STDOUT}"; then
+  pass "book-access-doctor healthy path reports the source and the filesystem type"
+else
+  fail "book-access-doctor healthy path reports the source and the filesystem type"
+fi
+if grep -Fq "the mounts look healthy" "${BK_BO_STDOUT}" \
+  && grep -Fq "No changes were made." "${BK_BO_STDOUT}"; then
+  pass "book-access-doctor healthy verdict says healthy and that nothing changed"
+else
+  fail "book-access-doctor healthy verdict says healthy and that nothing changed"
+fi
+if [[ ! -s "${BK_BO_STDERR}" ]]; then
+  pass "book-access-doctor healthy path asks no question (stderr empty)"
+else
+  fail "book-access-doctor healthy path asks no question (got: $(cat "${BK_BO_STDERR}"))"
+fi
+if [[ ! -s "${BK_BO_ELEV_LOG}" ]]; then
+  pass "book-access-doctor healthy path makes no elevated call"
+else
+  fail "book-access-doctor healthy path makes no elevated call (got: $(cat "${BK_BO_ELEV_LOG}"))"
+fi
+if [[ ! -s "${BK_BO_MOUNT_LOG}" ]]; then
+  pass "book-access-doctor healthy path never calls mount"
+else
+  fail "book-access-doctor healthy path never calls mount (got: $(cat "${BK_BO_MOUNT_LOG}"))"
+fi
+if diff -r "${BK_BO_HOME}" "${BK_BO_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "book-access-doctor healthy path writes nothing to the fake HOME (byte-identical)"
+else
+  fail "book-access-doctor healthy path modified the fake HOME"
+fi
+
+# Stage (bp): the one repair, confirmed yes, then undo. The canned table holds
+# one read-only vfat row (plus a healthy one, so the mixed case is exercised:
+# the repair applies to the first read-only mount only). Scripted stdin `y`
+# accepts the single confirmation. The stub log must hold EXACTLY one elevated
+# remount — with the target unquoted, because lib/elevate.sh splits the command
+# string into words itself and never runs a shell, so shell quotes would reach
+# mount as literal characters; the human-facing display is the quoted form and
+# stage (bm) asserts it.
+printf 'Stage bp: book-access-doctor read-only repair (confirm yes) and undo\n'
+BK_BP_HOME="${TMPBASE}/bk-home-bp"
+BK_BP_TABLE="${TMPBASE}/bk-table-bp.txt"
+BK_BP_PROBE="${TMPBASE}/bk-probe-bp"
+BK_BP_STDOUT="${TMPBASE}/bk-bp.stdout"
+BK_BP_STDERR="${TMPBASE}/bk-bp.stderr"
+BK_BP_FINDMNT_LOG="${TMPBASE}/bk-bp-findmnt.log"
+BK_BP_MOUNT_LOG="${TMPBASE}/bk-bp-mount.log"
+BK_BP_ELEV_LOG="${TMPBASE}/bk-bp-elevated.log"
+mkdir -p "${BK_BP_HOME}" "${BK_BP_PROBE}/media/user/KOBO"
+printf '%s\n' "${BK_ROW_RO_VFAT}" "${BK_ROW_RW_VFAT}" > "${BK_BP_TABLE}"
+code_bp="0"
+printf 'y\n' | PATH="${BK_BIN_MAIN}" HOME="${BK_BP_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BP_TABLE}" MINTBUTLER_MOUNT_PROBE_ROOT="${BK_BP_PROBE}" \
+  FINDMNT_STUB_LOG="${BK_BP_FINDMNT_LOG}" MOUNT_STUB_LOG="${BK_BP_MOUNT_LOG}" \
+  ELEVATED_STUB_LOG="${BK_BP_ELEV_LOG}" \
+  bash "${BK_MODULE}" run >"${BK_BP_STDOUT}" 2>"${BK_BP_STDERR}" || code_bp="$?"
+if [[ "${code_bp}" -eq 0 ]]; then
+  pass "book-access-doctor confirmed remount exits 0"
+else
+  fail "book-access-doctor confirmed remount exits 0 (got ${code_bp})"
+fi
+if grep -Fq "current:" "${BK_BP_STDOUT}" && grep -Fq "proposed:" "${BK_BP_STDOUT}"; then
+  pass "book-access-doctor repair offer shows current-versus-proposed before confirming"
+else
+  fail "book-access-doctor repair offer shows current-versus-proposed before confirming"
+fi
+if grep -Fq "mount -o remount,rw '${BK_TARGET_RO}'" "${BK_BP_STDOUT}"; then
+  pass "book-access-doctor repair offer shows the elevated command via the helper display"
+else
+  fail "book-access-doctor repair offer shows the elevated command via the helper display"
+fi
+if grep -Fq "the first read-only mount only" "${BK_BP_STDOUT}" \
+  && grep -Fq "/media/user/KOBO" "${BK_BP_STDOUT}"; then
+  pass "book-access-doctor mixed case repairs the first read-only mount and reports the healthy one"
+else
+  fail "book-access-doctor mixed case repairs the first read-only mount and reports the healthy one"
+fi
+BK_BP_STATE="${BK_BP_HOME}/${BK_STATE_REL}"
+if [[ -f "${BK_BP_STATE}" ]] \
+  && grep -Fxq "target=${BK_TARGET_RO}" "${BK_BP_STATE}" \
+  && grep -Fxq "prev_opts=ro,nosuid,nodev,relatime,uid=1000,gid=1000,dmask=022,fmask=133" "${BK_BP_STATE}"; then
+  pass "book-access-doctor records the target and the previous options before remounting"
+else
+  fail "book-access-doctor records the target and the previous options before remounting (got: $(cat "${BK_BP_STATE}" 2>/dev/null))"
+fi
+if [[ -f "${BK_BP_ELEV_LOG}" ]] && cmp -s "${BK_BP_ELEV_LOG}" <(printf 'sudo mount -o remount,rw %s\n' "${BK_TARGET_RO}"); then
+  pass "book-access-doctor runs exactly one elevated remount read-write"
+else
+  fail "book-access-doctor runs exactly one elevated remount read-write (got: $(cat "${BK_BP_ELEV_LOG}" 2>/dev/null))"
+fi
+if [[ -f "${BK_BP_MOUNT_LOG}" ]] && cmp -s "${BK_BP_MOUNT_LOG}" <(printf 'mount -o remount,rw %s\n' "${BK_TARGET_RO}"); then
+  pass "book-access-doctor elevated step is the remount and nothing else"
+else
+  fail "book-access-doctor elevated step is the remount and nothing else (got: $(cat "${BK_BP_MOUNT_LOG}" 2>/dev/null))"
+fi
+if [[ -f "${BK_BP_FINDMNT_LOG}" ]] && cmp -s "${BK_BP_FINDMNT_LOG}" <(printf 'findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS\nfindmnt -n -o OPTIONS %s\n' "${BK_TARGET_RO}"); then
+  pass "book-access-doctor verifies with exactly the two read-only findmnt calls"
+else
+  fail "book-access-doctor verifies with exactly the two read-only findmnt calls (got: $(cat "${BK_BP_FINDMNT_LOG}" 2>/dev/null))"
+fi
+if grep -Fq "${BK_ROW_RW_VFAT}" "${BK_BP_TABLE}"; then
+  pass "book-access-doctor stub table now reads the remounted row as rw"
+else
+  fail "book-access-doctor stub table now reads the remounted row as rw (got: $(cat "${BK_BP_TABLE}"))"
+fi
+if grep -Fq "Remounted read-write" "${BK_BP_STDOUT}" \
+  && grep -Fq "[u]ndo in the menu" "${BK_BP_STDOUT}"; then
+  pass "book-access-doctor success report names the repair and points at undo"
+else
+  fail "book-access-doctor success report names the repair and points at undo"
+fi
+bk_bp_fstab_line="$(grep -F '/dev/sdb1  /media/user/KINDLE  vfat  defaults,noauto  0  0' "${BK_BP_STDOUT}" || true)"
+if [[ -n "${bk_bp_fstab_line}" ]] && grep -Fq "INFORMATIONAL ONLY" "${BK_BP_STDOUT}" \
+  && grep -Fq "mintbutler will not write it" "${BK_BP_STDOUT}"; then
+  pass "book-access-doctor prints the informational fstab line and says it will not write it"
+else
+  fail "book-access-doctor prints the informational fstab line and says it will not write it (got: ${bk_bp_fstab_line})"
+fi
+if grep -Fq "Disks app" "${BK_BP_STDOUT}"; then
+  pass "book-access-doctor names the Disks app for a persistent mount"
+else
+  fail "book-access-doctor names the Disks app for a persistent mount"
+fi
+
+# Undo of the recorded repair: the elevated remount read-only runs from the
+# record, the canned table flips back to ro, the record and its directory are
+# deleted, and the report says plainly what restoring read-only means.
+BK_BP_UNDO_STDOUT="${TMPBASE}/bk-bp-undo.stdout"
+BK_BP_UNDO_STDERR="${TMPBASE}/bk-bp-undo.stderr"
+BK_BP_UNDO_MOUNT_LOG="${TMPBASE}/bk-bp-undo-mount.log"
+BK_BP_UNDO_ELEV_LOG="${TMPBASE}/bk-bp-undo-elevated.log"
+code_bp_undo="0"
+PATH="${BK_BIN_MAIN}" HOME="${BK_BP_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BP_TABLE}" MINTBUTLER_MOUNT_PROBE_ROOT="${BK_BP_PROBE}" \
+  MOUNT_STUB_LOG="${BK_BP_UNDO_MOUNT_LOG}" ELEVATED_STUB_LOG="${BK_BP_UNDO_ELEV_LOG}" \
+  bash "${BK_MODULE}" undo < /dev/null >"${BK_BP_UNDO_STDOUT}" 2>"${BK_BP_UNDO_STDERR}" || code_bp_undo="$?"
+if [[ "${code_bp_undo}" -eq 0 ]]; then
+  pass "book-access-doctor undo exits 0"
+else
+  fail "book-access-doctor undo exits 0 (got ${code_bp_undo})"
+fi
+if [[ -f "${BK_BP_UNDO_ELEV_LOG}" ]] && cmp -s "${BK_BP_UNDO_ELEV_LOG}" <(printf 'sudo mount -o remount,ro %s\n' "${BK_TARGET_RO}"); then
+  pass "book-access-doctor undo runs exactly one elevated remount read-only"
+else
+  fail "book-access-doctor undo runs exactly one elevated remount read-only (got: $(cat "${BK_BP_UNDO_ELEV_LOG}" 2>/dev/null))"
+fi
+if grep -Fq "${BK_ROW_RO_VFAT}" "${BK_BP_TABLE}"; then
+  pass "book-access-doctor undo leaves the stub table read-only again"
+else
+  fail "book-access-doctor undo leaves the stub table read-only again (got: $(cat "${BK_BP_TABLE}"))"
+fi
+if [[ ! -e "${BK_BP_STATE}" ]]; then
+  pass "book-access-doctor undo deletes the state record"
+else
+  fail "book-access-doctor undo deletes the state record"
+fi
+if [[ ! -d "${BK_BP_HOME}/.local/state/mintbutler/book-access-doctor" ]]; then
+  pass "book-access-doctor undo removes its state directory"
+else
+  fail "book-access-doctor undo removes its state directory"
+fi
+if grep -Fq "mounted read-only again" "${BK_BP_UNDO_STDOUT}" \
+  && grep -Fq "new writes stop now" "${BK_BP_UNDO_STDOUT}" \
+  && grep -Fq "state record was deleted" "${BK_BP_UNDO_STDOUT}"; then
+  pass "book-access-doctor undo report states the restored read-only state and its meaning"
+else
+  fail "book-access-doctor undo report states the restored read-only state and its meaning"
+fi
+if [[ ! -s "${BK_BP_UNDO_STDERR}" ]]; then
+  pass "book-access-doctor undo asks no question (stderr empty)"
+else
+  fail "book-access-doctor undo asks no question (got: $(cat "${BK_BP_UNDO_STDERR}"))"
+fi
+
+# Second undo with no record left: honest "Nothing to undo.", exit 0, no call.
+BK_BP_UNDO2_STDOUT="${TMPBASE}/bk-bp-undo2.stdout"
+BK_BP_UNDO2_ELEV_LOG="${TMPBASE}/bk-bp-undo2-elevated.log"
+code_bp_undo2="0"
+PATH="${BK_BIN_MAIN}" HOME="${BK_BP_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BP_TABLE}" ELEVATED_STUB_LOG="${BK_BP_UNDO2_ELEV_LOG}" \
+  bash "${BK_MODULE}" undo < /dev/null >"${BK_BP_UNDO2_STDOUT}" 2>/dev/null || code_bp_undo2="$?"
+if [[ "${code_bp_undo2}" -eq 0 ]] && grep -Fxq "Nothing to undo." "${BK_BP_UNDO2_STDOUT}"; then
+  pass "book-access-doctor second undo reports Nothing to undo and exits 0"
+else
+  fail "book-access-doctor second undo reports Nothing to undo and exits 0 (got ${code_bp_undo2})"
+fi
+if [[ ! -s "${BK_BP_UNDO2_ELEV_LOG}" ]]; then
+  pass "book-access-doctor second undo makes no elevated call"
+else
+  fail "book-access-doctor second undo makes no elevated call (got: $(cat "${BK_BP_UNDO2_ELEV_LOG}"))"
+fi
+
+# Stage (bq): confirm-no on the same read-only fixture, and a read-only medium
+# whose filesystem type a remount cannot help. Both exit 0 with no mount call,
+# no elevated call and nothing written; the iso9660 case asks no question at
+# all (its verdict is delivered before any confirmation would be offered).
+printf 'Stage bq: book-access-doctor confirm-no and non-remountable filesystem\n'
+BK_BQ_HOME="${TMPBASE}/bk-home-bq"
+BK_BQ_HOME_BEFORE="${TMPBASE}/bk-home-bq-before"
+BK_BQ_TABLE="${TMPBASE}/bk-table-bq.txt"
+BK_BQ_STDOUT="${TMPBASE}/bk-bq.stdout"
+BK_BQ_STDERR="${TMPBASE}/bk-bq.stderr"
+BK_BQ_MOUNT_LOG="${TMPBASE}/bk-bq-mount.log"
+BK_BQ_ELEV_LOG="${TMPBASE}/bk-bq-elevated.log"
+mkdir -p "${BK_BQ_HOME}"
+cp -a "${BK_BQ_HOME}" "${BK_BQ_HOME_BEFORE}"
+printf '%s\n' "${BK_ROW_RO_VFAT}" > "${BK_BQ_TABLE}"
+code_bq="0"
+printf 'n\n' | PATH="${BK_BIN_MAIN}" HOME="${BK_BQ_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BQ_TABLE}" MOUNT_STUB_LOG="${BK_BQ_MOUNT_LOG}" \
+  ELEVATED_STUB_LOG="${BK_BQ_ELEV_LOG}" \
+  bash "${BK_MODULE}" run >"${BK_BQ_STDOUT}" 2>"${BK_BQ_STDERR}" || code_bq="$?"
+if [[ "${code_bq}" -eq 0 ]]; then
+  pass "book-access-doctor confirm-no exits 0"
+else
+  fail "book-access-doctor confirm-no exits 0 (got ${code_bq})"
+fi
+if grep -Fxq "Nothing changed." "${BK_BQ_STDOUT}"; then
+  pass "book-access-doctor confirm-no reports Nothing changed"
+else
+  fail "book-access-doctor confirm-no reports Nothing changed"
+fi
+if [[ ! -s "${BK_BQ_MOUNT_LOG}" ]] && [[ ! -s "${BK_BQ_ELEV_LOG}" ]]; then
+  pass "book-access-doctor confirm-no makes no mount or elevated call"
+else
+  fail "book-access-doctor confirm-no makes no mount or elevated call"
+fi
+if [[ ! -e "${BK_BQ_HOME}/${BK_STATE_REL}" ]]; then
+  pass "book-access-doctor confirm-no writes no state record"
+else
+  fail "book-access-doctor confirm-no writes no state record"
+fi
+if diff -r "${BK_BQ_HOME}" "${BK_BQ_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "book-access-doctor confirm-no writes nothing to the fake HOME (byte-identical)"
+else
+  fail "book-access-doctor confirm-no modified the fake HOME"
+fi
+if grep -Fq "${BK_ROW_RO_VFAT}" "${BK_BQ_TABLE}"; then
+  pass "book-access-doctor confirm-no leaves the canned table read-only"
+else
+  fail "book-access-doctor confirm-no leaves the canned table read-only"
+fi
+
+# EOF on stdin is a NO too (lib/ask.sh), which is what a modulelint sandbox run
+# with stdin /dev/null hits on a machine that really has a read-only mount.
+BK_BQ2_STDOUT="${TMPBASE}/bk-bq2.stdout"
+code_bq2="0"
+PATH="${BK_BIN_MAIN}" HOME="${BK_BQ_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BQ_TABLE}" ELEVATED_STUB_LOG="${TMPBASE}/bk-bq2-elevated.log" \
+  bash "${BK_MODULE}" run < /dev/null >"${BK_BQ2_STDOUT}" 2>/dev/null || code_bq2="$?"
+if [[ "${code_bq2}" -eq 0 ]] && grep -Fxq "Nothing changed." "${BK_BQ2_STDOUT}"; then
+  pass "book-access-doctor treats EOF on the confirmation as NO (Nothing changed, exit 0)"
+else
+  fail "book-access-doctor treats EOF on the confirmation as NO (got ${code_bq2})"
+fi
+
+# Non-remountable filesystem: a read-only iso9660 row earns the honest
+# not-applicable verdict with no question and no mount call.
+BK_BQ3_HOME="${TMPBASE}/bk-home-bq3"
+BK_BQ3_HOME_BEFORE="${TMPBASE}/bk-home-bq3-before"
+BK_BQ3_TABLE="${TMPBASE}/bk-table-bq3.txt"
+BK_BQ3_STDOUT="${TMPBASE}/bk-bq3.stdout"
+BK_BQ3_STDERR="${TMPBASE}/bk-bq3.stderr"
+BK_BQ3_MOUNT_LOG="${TMPBASE}/bk-bq3-mount.log"
+BK_BQ3_ELEV_LOG="${TMPBASE}/bk-bq3-elevated.log"
+mkdir -p "${BK_BQ3_HOME}"
+cp -a "${BK_BQ3_HOME}" "${BK_BQ3_HOME_BEFORE}"
+printf '%s\n' "${BK_ROW_RO_ISO}" > "${BK_BQ3_TABLE}"
+code_bq3="0"
+PATH="${BK_BIN_MAIN}" HOME="${BK_BQ3_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BQ3_TABLE}" MOUNT_STUB_LOG="${BK_BQ3_MOUNT_LOG}" \
+  ELEVATED_STUB_LOG="${BK_BQ3_ELEV_LOG}" \
+  bash "${BK_MODULE}" run < /dev/null >"${BK_BQ3_STDOUT}" 2>"${BK_BQ3_STDERR}" || code_bq3="$?"
+if [[ "${code_bq3}" -eq 0 ]]; then
+  pass "book-access-doctor iso9660 path exits 0 (verdict delivered)"
+else
+  fail "book-access-doctor iso9660 path exits 0 (got ${code_bq3})"
+fi
+if grep -Fq "remounting read-write does not apply to this filesystem type (iso9660)" "${BK_BQ3_STDOUT}"; then
+  pass "book-access-doctor iso9660 verdict says remounting rw does not apply to this filesystem type"
+else
+  fail "book-access-doctor iso9660 verdict says remounting rw does not apply to this filesystem type"
+fi
+if [[ ! -s "${BK_BQ3_STDERR}" ]]; then
+  pass "book-access-doctor iso9660 path asks no question (stderr empty)"
+else
+  fail "book-access-doctor iso9660 path asks no question (got: $(cat "${BK_BQ3_STDERR}"))"
+fi
+if [[ ! -s "${BK_BQ3_MOUNT_LOG}" ]] && [[ ! -s "${BK_BQ3_ELEV_LOG}" ]]; then
+  pass "book-access-doctor iso9660 path makes no mount or elevated call"
+else
+  fail "book-access-doctor iso9660 path makes no mount or elevated call"
+fi
+if diff -r "${BK_BQ3_HOME}" "${BK_BQ3_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "book-access-doctor iso9660 path writes nothing to the fake HOME (byte-identical)"
+else
+  fail "book-access-doctor iso9660 path modified the fake HOME"
+fi
+
+# Stage (br): remount failure. The stub mount refuses, so the confirmed repair
+# fails: exit 1, one plain module stderr line naming the kept record, nothing
+# claimed on stdout, the canned table still read-only. The same fixture then
+# exercises the two honest refusals of undo (a failing elevated step, and
+# missing tools) — in both cases the record is kept so a later undo can still
+# restore the pre-repair read-only state.
+printf 'Stage br: book-access-doctor remount failure and undo refusals\n'
+BK_BR_HOME="${TMPBASE}/bk-home-br"
+BK_BR_TABLE="${TMPBASE}/bk-table-br.txt"
+BK_BR_STDOUT="${TMPBASE}/bk-br.stdout"
+BK_BR_STDERR="${TMPBASE}/bk-br.stderr"
+BK_BR_ELEV_LOG="${TMPBASE}/bk-br-elevated.log"
+mkdir -p "${BK_BR_HOME}"
+printf '%s\n' "${BK_ROW_RO_VFAT}" > "${BK_BR_TABLE}"
+code_br="0"
+printf 'y\n' | PATH="${BK_BIN_MAIN}" HOME="${BK_BR_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BR_TABLE}" MOUNT_STUB_FAIL=1 \
+  ELEVATED_STUB_LOG="${BK_BR_ELEV_LOG}" \
+  bash "${BK_MODULE}" run >"${BK_BR_STDOUT}" 2>"${BK_BR_STDERR}" || code_br="$?"
+if [[ "${code_br}" -eq 1 ]]; then
+  pass "book-access-doctor failed remount exits 1"
+else
+  fail "book-access-doctor failed remount exits 1 (got ${code_br})"
+fi
+br_stderr_lines="$(bk_stderr_lines "${BK_BR_STDERR}")"
+if [[ "${br_stderr_lines}" -eq 1 ]] \
+  && grep -Fq "The remount failed" "${BK_BR_STDERR}" \
+  && grep -Fq "undo can remount read-only to restore the previous state" "${BK_BR_STDERR}"; then
+  pass "book-access-doctor failed remount prints one plain stderr line pointing at undo"
+else
+  fail "book-access-doctor failed remount prints one plain stderr line pointing at undo (got ${br_stderr_lines}: $(cat "${BK_BR_STDERR}"))"
+fi
+if grep -Fq "Remounted read-write" "${BK_BR_STDOUT}"; then
+  fail "book-access-doctor failed remount claims nothing on stdout"
+else
+  pass "book-access-doctor failed remount claims nothing on stdout"
+fi
+if [[ -f "${BK_BR_HOME}/${BK_STATE_REL}" ]] \
+  && grep -Fxq "target=${BK_TARGET_RO}" "${BK_BR_HOME}/${BK_STATE_REL}"; then
+  pass "book-access-doctor failed remount keeps the state record"
+else
+  fail "book-access-doctor failed remount keeps the state record"
+fi
+if grep -Fq "${BK_ROW_RO_VFAT}" "${BK_BR_TABLE}"; then
+  pass "book-access-doctor failed remount leaves the canned table read-only"
+else
+  fail "book-access-doctor failed remount left the canned table changed"
+fi
+
+# Undo with a still-failing elevated step: exit 1, one plain stderr line, and
+# the record survives.
+BK_BR_UNDO_STDOUT="${TMPBASE}/bk-br-undo.stdout"
+BK_BR_UNDO_STDERR="${TMPBASE}/bk-br-undo.stderr"
+code_br_undo="0"
+PATH="${BK_BIN_MAIN}" HOME="${BK_BR_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BK_BR_TABLE}" MOUNT_STUB_FAIL=1 \
+  bash "${BK_MODULE}" undo < /dev/null >"${BK_BR_UNDO_STDOUT}" 2>"${BK_BR_UNDO_STDERR}" || code_br_undo="$?"
+if [[ "${code_br_undo}" -eq 1 ]]; then
+  pass "book-access-doctor failing undo exits 1"
+else
+  fail "book-access-doctor failing undo exits 1 (got ${code_br_undo})"
+fi
+br_undo_stderr_lines="$(bk_stderr_lines "${BK_BR_UNDO_STDERR}")"
+if [[ "${br_undo_stderr_lines}" -eq 1 ]] && grep -Fq "the record is kept" "${BK_BR_UNDO_STDERR}"; then
+  pass "book-access-doctor failing undo prints one plain stderr line and keeps the record"
+else
+  fail "book-access-doctor failing undo prints one plain stderr line and keeps the record (got ${br_undo_stderr_lines}: $(cat "${BK_BR_UNDO_STDERR}"))"
+fi
+if [[ -f "${BK_BR_HOME}/${BK_STATE_REL}" ]]; then
+  pass "book-access-doctor failing undo leaves the state record in place"
+else
+  fail "book-access-doctor failing undo deleted the state record"
+fi
+
+# Undo with the tools gone: an honest refusal, record kept, exit 1.
+BK_BR_UNDO2_STDERR="${TMPBASE}/bk-br-undo2.stderr"
+code_br_undo2="0"
+PATH="${BK_BIN_EMPTY}" HOME="${BK_BR_HOME}" XDG_STATE_HOME="" \
+  bash "${BK_MODULE}" undo < /dev/null >/dev/null 2>"${BK_BR_UNDO2_STDERR}" || code_br_undo2="$?"
+if [[ "${code_br_undo2}" -eq 1 ]]; then
+  pass "book-access-doctor undo without the mount tools exits 1"
+else
+  fail "book-access-doctor undo without the mount tools exits 1 (got ${code_br_undo2})"
+fi
+br_undo2_stderr_lines="$(bk_stderr_lines "${BK_BR_UNDO2_STDERR}")"
+if [[ "${br_undo2_stderr_lines}" -eq 1 ]] && grep -Fq "Cannot undo" "${BK_BR_UNDO2_STDERR}"; then
+  pass "book-access-doctor undo without the mount tools prints one plain refusal line"
+else
+  fail "book-access-doctor undo without the mount tools prints one plain refusal line (got ${br_undo2_stderr_lines}: $(cat "${BK_BR_UNDO2_STDERR}"))"
+fi
+if [[ -f "${BK_BR_HOME}/${BK_STATE_REL}" ]]; then
+  pass "book-access-doctor undo without the mount tools keeps the state record"
+else
+  fail "book-access-doctor undo without the mount tools deleted the state record"
+fi
+
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
