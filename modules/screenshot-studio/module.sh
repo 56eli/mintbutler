@@ -20,8 +20,6 @@ source "${LIB_DIR}/elevate.sh"
 
 # Fixed, reviewed install command; the privileged prefix is added by
 # lib/elevate.sh, which shows the full line before it runs anything.
-INSTALL_COMMAND="apt-get install -y flameshot"
-
 BUILTIN_KEY="/org/cinnamon/keybindings/screenshot"
 CUSTOM_LIST_KEY="/org/cinnamon/keybindings/custom-list"
 CUSTOM_SLOT="/org/cinnamon/keybindings/custom/mintbutler-flameshot"
@@ -40,7 +38,7 @@ describe() {
 plan() {
   printf 'Plan for screenshot-studio:\n'
   printf '1. Check whether Flameshot is installed; if it is missing, run the single\n'
-  printf '   elevated, confirmed step: %s\n' "$(elevate_command_line "${INSTALL_COMMAND}")"
+  printf '   elevated, confirmed step: %s\n' "$(elevate_command_line apt-get install -y flameshot)"
   printf '2. Check that dconf is available; stop without writing if it is not.\n'
   printf '3. If %s/command already points at flameshot, report it and stop.\n' "${CUSTOM_SLOT}"
   printf '4. Record the current %s and %s values in\n' "${BUILTIN_KEY}" "${CUSTOM_LIST_KEY}"
@@ -55,7 +53,7 @@ dry_run() {
   plan
   printf '\n'
   printf 'Exact commands (nothing runs now; values as written):\n'
-  printf '  %s\n' "$(elevate_command_line "${INSTALL_COMMAND}")"
+  printf '  %s\n' "$(elevate_command_line apt-get install -y flameshot)"
   printf '  dconf read %s ; dconf read %s ; dconf read %s/command\n' \
     "${BUILTIN_KEY}" "${CUSTOM_LIST_KEY}" "${CUSTOM_SLOT}"
   printf "  dconf write %s/name '%s'\n" "${CUSTOM_SLOT}" "${SLOT_NAME}"
@@ -145,7 +143,7 @@ run() {
     printf 'Flameshot is already installed; skipping the install step.\n'
   else
     printf 'Flameshot is missing; running the single elevated step.\n'
-    elevate_run "${INSTALL_COMMAND}" || install_code="$?"
+    elevate_run apt-get install -y flameshot || install_code="$?"
     if ! command -v flameshot >/dev/null 2>&1; then
       printf 'The flameshot install did not succeed (elevated command exited %d); nothing else was changed.\n' \
         "${install_code}" >&2

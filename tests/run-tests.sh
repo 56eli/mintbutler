@@ -2372,10 +2372,22 @@ fi
 EOF_STUB_AN
 chmod +x "${TG_AN_BIN}/timeshift"
 
+# Recording passthrough sudo: logs the flat display line to ELEVATED_STUB_LOG
+# (when set) and the exact argv list — one word per line, calls separated by
+# '==' — to MB_ARGV_SUDO_LOG (when set), then runs the command unprivileged.
 cat <<'EOF_SUDO_PASS' > "${TG_AN_BIN}/sudo"
 #!/usr/bin/env bash
 set -euo pipefail
-"$@"
+LOG="${ELEVATED_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'sudo%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+ARGVLOG="${MB_ARGV_SUDO_LOG:-}"
+if [[ -n "${ARGVLOG}" && "$#" -gt 0 ]]; then
+  printf '%s\n' "$@" >> "${ARGVLOG}"
+  printf '==\n' >> "${ARGVLOG}"
+fi
+exec "$@"
 EOF_SUDO_PASS
 chmod +x "${TG_AN_BIN}/sudo"
 
@@ -2432,9 +2444,11 @@ cp "${TG_AN_BIN}/sudo" "${TG_AO_BIN}/sudo"
 
 output_ao=""
 code_ao="0"
+AO_ARGV_LOG="${TMPBASE}/tg-ao-argv.log"
+rm -f "${AO_ARGV_LOG}"
 # Scripted stdin = Enter (accept the default comment). There is nothing else to
 # answer: the menu already took the single confirmation for this run.
-output_ao="$(export AO_LOG; printf '\n' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ao="$?"
+output_ao="$(export AO_LOG MB_ARGV_SUDO_LOG="${AO_ARGV_LOG}"; printf '\n' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ao="$?"
 if [[ "${code_ao}" -eq 0 ]]; then
   pass "timeshift-guardian configured happy path exits 0"
 else
@@ -2445,8 +2459,21 @@ if ! printf '%s\n' "${output_ao}" | grep -q '\[y/N\]'; then
 else
   fail "timeshift-guardian asks no y/N question once launched (MB-004 violated)"
 fi
+# The elevated argv proof (MB-001): the recording sudo stub saw EXACTLY
+# list / create --comments <one comment word> / list — and the default
+# comment, spaces and all, arrived as a single argv word.
+{
+  printf 'timeshift\n--list\n==\n'
+  printf 'timeshift\n--create\n--comments\n%s\n==\n' "mintbutler guard $(date +%Y-%m-%d)"
+  printf 'timeshift\n--list\n==\n'
+} > "${AO_ARGV_LOG}.expected"
+if [[ -f "${AO_ARGV_LOG}" ]] && cmp -s "${AO_ARGV_LOG}" "${AO_ARGV_LOG}.expected"; then
+  pass "timeshift-guardian elevated steps reach sudo as exact argv lists (the comment is ONE word)"
+else
+  fail "timeshift-guardian elevated steps reach sudo as exact argv lists (got: $(cat "${AO_ARGV_LOG}" 2>/dev/null))"
+fi
 if grep -q -- "--list" "${AO_LOG}" \
-  && grep -E "timeshift --create --comments 'mintbutler guard" "${AO_LOG}" >/dev/null; then
+  && grep -Eq "^timeshift --create --comments mintbutler guard [0-9]{4}-[0-9]{2}-[0-9]{2}$" "${AO_LOG}" >/dev/null; then
   pass "timeshift-guardian happy path log shows --list, --create with default comment, and --list again"
 else
   fail "timeshift-guardian happy path log shows --list, --create with default comment, and --list again"
@@ -5664,10 +5691,9 @@ fi
 # exercised: the repair applies to the first read-only mount only). The menu
 # took the single confirmation for this run, so the module asks nothing
 # (MODULE_SPEC §3, MB-004). The stub log must hold EXACTLY one elevated
-# remount — with the target unquoted, because lib/elevate.sh splits the command
-# string into words itself and never runs a shell, so shell quotes would reach
-# mount as literal characters; the human-facing display is the quoted form and
-# stage (bm) asserts it.
+# remount, and the target travels as ONE argv word from the module to sudo
+# (MB-001); the human-facing display is DERIVED from that same argv list —
+# a whitespace-free target appears bare in it.
 printf 'Stage bp: book-access-doctor read-only repair with stdin closed (menu-confirmation law), and undo\n'
 BK_BP_HOME="${TMPBASE}/bk-home-bp"
 BK_BP_TABLE="${TMPBASE}/bk-table-bp.txt"
@@ -5701,10 +5727,10 @@ if grep -Fq "current:" "${BK_BP_STDOUT}" && grep -Fq "proposed:" "${BK_BP_STDOUT
 else
   fail "book-access-doctor repair shows current-versus-proposed before remounting"
 fi
-if grep -Fq "mount -o remount,rw '${BK_TARGET_RO}'" "${BK_BP_STDOUT}"; then
-  pass "book-access-doctor repair offer shows the elevated command via the helper display"
+if grep -Fq "sudo mount -o remount,rw ${BK_TARGET_RO}" "${BK_BP_STDOUT}"; then
+  pass "book-access-doctor repair offer shows the elevated command via the derived helper display"
 else
-  fail "book-access-doctor repair offer shows the elevated command via the helper display"
+  fail "book-access-doctor repair offer shows the elevated command via the derived helper display"
 fi
 if grep -Fq "the first read-only mount only" "${BK_BP_STDOUT}" \
   && grep -Fq "/media/user/KOBO" "${BK_BP_STDOUT}"; then
@@ -6168,6 +6194,332 @@ for bt_slug in appimage-installer audio-repair book-access-doctor default-apps-e
   system-report-pack timeshift-guardian; do
   bt_check_module_screens "${bt_slug}"
 done
+
+# ---------------------------------------------------------------------------
+# Stage (bu): lib/elevate.sh argv unit tests (MB-001). The displayed line is
+# DERIVED from the argv list (safe words bare, everything else single-quoted
+# with the '\'' escape); an eval round-trip of the display reads back the very
+# same argv list word-for-word, including the empty word; elevate_run hands
+# sudo exactly the caller's argv; zero-argument calls refuse (1 for display,
+# 126 for run); and a low-risk manifest still refuses (126) with no sudo call.
+# ---------------------------------------------------------------------------
+printf 'Stage bu: lib/elevate.sh argv unit tests (MB-001)\n'
+
+BU_DIR="${TMPBASE}/bu"
+BU_BIN="${BU_DIR}/bin"
+mkdir -p "${BU_BIN}"
+for bu_tool in bash dirname sed; do
+  bu_tool_path="$(command -v "${bu_tool}" || true)"
+  if [[ -n "${bu_tool_path}" ]]; then
+    ln -sf "${bu_tool_path}" "${BU_BIN}/${bu_tool}"
+  fi
+done
+
+# Recording passthrough sudo (same contract as every module stage): flat line
+# to ELEVATED_STUB_LOG, exact argv (one word per line, '==' between calls) to
+# MB_ARGV_SUDO_LOG, then run unprivileged. Plus an argv-logging timeshift.
+cat <<'BU_SUDO_STUB' > "${BU_BIN}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${ELEVATED_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'sudo%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+ARGVLOG="${MB_ARGV_SUDO_LOG:-}"
+if [[ -n "${ARGVLOG}" && "$#" -gt 0 ]]; then
+  printf '%s\n' "$@" >> "${ARGVLOG}"
+  printf '==\n' >> "${ARGVLOG}"
+fi
+exec "$@"
+BU_SUDO_STUB
+cat <<'BU_TS_STUB' > "${BU_BIN}/timeshift"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${MB_ARGV_TS_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  bts_n=0
+  for bts_word in "$@"; do
+    bts_n=$((bts_n + 1))
+    printf 'arg%d=%s\n' "${bts_n}" "${bts_word}" >> "${LOG}"
+  done
+  printf '==\n' >> "${LOG}"
+fi
+exit 0
+BU_TS_STUB
+# eval round-trip prover: its argv is the expected list; it must rebuild the
+# very same list from the derived display line and print that line.
+cat <<'BU_ROUNDTRIP' > "${BU_DIR}/roundtrip.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+source "${MB_LIB:?}/elevate.sh"
+disp="$(elevate_command_line "$@")"
+line="${disp#sudo }"
+parsed=()
+eval "parsed=(${line})"
+if [[ "${#parsed[@]}" -ne "$#" ]]; then
+  printf 'roundtrip: list length changed (%s -> %s)\n' "$#" "${#parsed[@]}" >&2
+  exit 3
+fi
+idx=0
+for word in "$@"; do
+  if [[ "${parsed[idx]}" != "${word}" ]]; then
+    printf 'roundtrip: word %d changed (expected <%s>, got <%s>)\n' "${idx}" "${word}" "${parsed[idx]}" >&2
+    exit 4
+  fi
+  idx=$((idx + 1))
+done
+printf '%s\n' "${disp}"
+BU_ROUNDTRIP
+chmod +x "${BU_BIN}/sudo" "${BU_BIN}/timeshift" "${BU_DIR}/roundtrip.sh"
+
+BU_LIB_ENV=(PATH="${BU_BIN}" MINTBUTLER_LIB_DIR="${REPO_ROOT}/lib")
+
+bu_disp="$(env "${BU_LIB_ENV[@]}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line apt-get install -y flameshot')"
+if [[ "${bu_disp}" == "sudo apt-get install -y flameshot" ]]; then
+  pass "elevate display: a safe list renders flat and unquoted"
+else
+  fail "elevate display: a safe list renders flat and unquoted (got: ${bu_disp})"
+fi
+
+bu_disp="$(env "${BU_LIB_ENV[@]}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line mount -o remount,rw "<target>"')"
+if [[ "${bu_disp}" == "sudo mount -o remount,rw '<target>'" ]]; then
+  pass "elevate display: a placeholder word is single-quoted in the derived line"
+else
+  fail "elevate display: a placeholder word is single-quoted in the derived line (got: ${bu_disp})"
+fi
+
+BU_HOSTILE="it's \$HOME; reboot"
+bu_disp="$(env "${BU_LIB_ENV[@]}" BU_WORD="${BU_HOSTILE}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line timeshift --create --comments "${BU_WORD}"')"
+bu_expected="sudo timeshift --create --comments 'it'\''s \$HOME; reboot"
+if [[ "${bu_disp}" == "${bu_expected}" ]]; then
+  pass "elevate display: a hostile word (spaces, quotes, \$, ;) derives the escaped display a human would type"
+else
+  fail "elevate display: hostile word derivation (expected <${bu_expected}>, got <${bu_disp}>)"
+fi
+
+bu_disp="$(env "${BU_LIB_ENV[@]}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line printf "" x')"
+if [[ "${bu_disp}" == "sudo printf '' x" ]]; then
+  pass "elevate display: the empty word renders as ''"
+else
+  fail "elevate display: the empty word renders as '' (got: ${bu_disp})"
+fi
+
+bu_rt_out=""
+bu_rt_code="0"
+bu_rt_out="$(MB_LIB="${REPO_ROOT}/lib" bash "${BU_DIR}/roundtrip.sh" \
+  "a b" "it's" 'say "hi; there"' "" "/plain/path-1" "x=y,%z:w@q" 2>&1)" || bu_rt_code="$?"
+bu_rt_expected="sudo 'a b' 'it'\''s' 'say \"hi; there\"' '' /plain/path-1 x=y,%z:w@q"
+if [[ "${bu_rt_code}" -eq 0 && "${bu_rt_out}" == "${bu_rt_expected}" ]]; then
+  pass "elevate display: eval round-trip reads the derived line back as the same argv list word-for-word"
+else
+  fail "elevate display: eval round-trip (code ${bu_rt_code}, expected <${bu_rt_expected}>, got <${bu_rt_out}>)"
+fi
+
+bu_out=""
+bu_code="0"
+bu_out="$(env "${BU_LIB_ENV[@]}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line' 2>&1)" || bu_code="$?"
+if [[ "${bu_code}" -eq 1 && "${bu_out}" == "elevate: no command to show (empty command list)" ]]; then
+  pass "elevate_command_line with zero arguments refuses with exit 1 and the plain reason"
+else
+  fail "elevate_command_line with zero arguments refuses (code ${bu_code}, got: ${bu_out})"
+fi
+
+bu_out=""
+bu_code="0"
+bu_out="$(env "${BU_LIB_ENV[@]}" MINTBUTLER_MODULE_SLUG=book-access-doctor \
+  bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_run' 2>&1)" || bu_code="$?"
+if [[ "${bu_code}" -eq 126 && "${bu_out}" == "elevate: refusing to run an empty elevated command" ]]; then
+  pass "elevate_run with zero arguments refuses with exit 126 and the plain reason"
+else
+  fail "elevate_run with zero arguments refuses (code ${bu_code}, got: ${bu_out})"
+fi
+
+BU_LOW_ARGV="${TMPBASE}/bu-low-argv.log"
+rm -f "${BU_LOW_ARGV}"
+bu_out=""
+bu_code="0"
+bu_out="$(env "${BU_LIB_ENV[@]}" MINTBUTLER_MODULE_SLUG=printer-helper MB_ARGV_SUDO_LOG="${BU_LOW_ARGV}" \
+  bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_run id' 2>&1)" || bu_code="$?"
+if [[ "${bu_code}" -eq 126 && "${bu_out}" == *"risk: low"* && ! -e "${BU_LOW_ARGV}" ]]; then
+  pass "elevate_run under a low-risk manifest refuses with 126 and never calls sudo"
+else
+  fail "elevate_run under a low-risk manifest refuses with 126 and never calls sudo (code ${bu_code}, got: ${bu_out})"
+fi
+
+BU_EXEC_ARGV="${TMPBASE}/bu-exec-argv.log"
+BU_EXEC_TS="${TMPBASE}/bu-exec-ts.log"
+rm -f "${BU_EXEC_ARGV}" "${BU_EXEC_TS}"
+bu_out=""
+bu_code="0"
+bu_out="$(env "${BU_LIB_ENV[@]}" MINTBUTLER_MODULE_SLUG=book-access-doctor \
+  MB_ARGV_SUDO_LOG="${BU_EXEC_ARGV}" MB_ARGV_TS_LOG="${BU_EXEC_TS}" BU_WORD="${BU_HOSTILE}" \
+  bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_run timeshift --create --comments "${BU_WORD}"' 2>&1)" || bu_code="$?"
+{
+  printf 'timeshift\n--create\n--comments\n%s\n==\n' "${BU_HOSTILE}"
+} > "${BU_EXEC_ARGV}.expected"
+if [[ "${bu_code}" -eq 0 && -f "${BU_EXEC_ARGV}" ]] \
+  && cmp -s "${BU_EXEC_ARGV}" "${BU_EXEC_ARGV}.expected"; then
+  pass "elevate_run hands sudo exactly the caller's argv (a hostile comment is ONE word)"
+else
+  fail "elevate_run hands sudo exactly the caller's argv (code ${bu_code}, got: $(cat "${BU_EXEC_ARGV}" 2>/dev/null))"
+fi
+if [[ -f "${BU_EXEC_TS}" ]] && grep -Fxq "arg3=${BU_HOSTILE}" "${BU_EXEC_TS}" \
+  && ! grep -q '^arg4=' "${BU_EXEC_TS}"; then
+  pass "elevate_run exec: the hostile comment arrives at the command as exactly one argument"
+else
+  fail "elevate_run exec: the hostile comment arrives at the command as exactly one argument (got: $(cat "${BU_EXEC_TS}" 2>/dev/null))"
+fi
+if printf '%s\n' "${bu_out}" | grep -Fxq "Running elevated command: ${bu_expected}"; then
+  pass "elevate_run prints the derived display line of exactly the argv it runs"
+else
+  fail "elevate_run prints the derived display line of exactly the argv it runs (got: ${bu_out})"
+fi
+
+# ---------------------------------------------------------------------------
+# Stage (bv): hostile-input end-to-end through the modules (MB-001). The
+# snapshot comment / mount target strings below contain spaces, single and
+# double quotes, '$', and ';'. Each must reach the stubbed command as EXACTLY
+# one argv word — and the displayed line must be the safely-quoted form a
+# human would type.
+# ---------------------------------------------------------------------------
+printf 'Stage bv: hostile-input end-to-end through the modules (MB-001)\n'
+
+BV_TG_BIN="${TMPBASE}/bv-bin-tg"
+tg_make_bin "${BV_TG_BIN}" >/dev/null
+cp "${TG_AN_BIN}/sudo" "${BV_TG_BIN}/sudo"
+cat <<'BV_TS_STUB' > "${BV_TG_BIN}/timeshift"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${MB_ARGV_TS_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  bts_n=0
+  for bts_word in "$@"; do
+    bts_n=$((bts_n + 1))
+    printf 'arg%d=%s\n' "${bts_n}" "${bts_word}" >> "${LOG}"
+  done
+  printf '==\n' >> "${LOG}"
+fi
+if [[ "${1:-}" == "--list" ]]; then
+  echo "Mounted at : /run/timeshift/backup"
+  echo "Device     : /dev/sda1"
+  echo "Mode       : RSYNC"
+  echo "Device is OK"
+  echo "------------------------------------------------------------------------------"
+  echo "Num     Name                 Tags  Description"
+  echo "------------------------------------------------------------------------------"
+  echo "0    >  2026-09-16_12-00-00  O D   Initial"
+  exit 0
+fi
+exit 0
+BV_TS_STUB
+chmod +x "${BV_TG_BIN}/timeshift"
+
+# bv_tg_case COMMENT PROOF_SLUG — one full timeshift-guardian run whose
+# comment is COMMENT; asserts exit 0, the exact derived display line, and an
+# argv-exact recording at both the sudo and the timeshift stubs.
+bv_tg_case() {
+  local comment="${1:-}"
+  local slug="${2:-}"
+  local argv_log="${TMPBASE}/bv-${slug}-argv.log"
+  local ts_log="${TMPBASE}/bv-${slug}-ts.log"
+  local out=""
+  local code="0"
+  rm -f "${argv_log}" "${ts_log}"
+  out="$(MB_ARGV_SUDO_LOG="${argv_log}" MB_ARGV_TS_LOG="${ts_log}" \
+    PATH="${BV_TG_BIN}" bash "${TG_MODULE}" run <<< "${comment}" 2>&1)" || code="$?"
+  if [[ "${code}" -eq 0 ]]; then
+    pass "hostile comment (${slug}) run exits 0"
+  else
+    fail "hostile comment (${slug}) run exits 0 (got ${code})"
+  fi
+  local expected_line=""
+  expected_line="$(env PATH="${BU_BIN}" MINTBUTLER_LIB_DIR="${REPO_ROOT}/lib" BV_WORD="${comment}" \
+    bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line timeshift --create --comments "${BV_WORD}"')"
+  if printf '%s\n' "${out}" | grep -Fxq "Creating the snapshot with: ${expected_line}"; then
+    pass "hostile comment (${slug}) shows the derived single-quoted display"
+  else
+    fail "hostile comment (${slug}) shows the derived single-quoted display (expected <${expected_line}>)"
+  fi
+  {
+    printf 'timeshift\n--list\n==\n'
+    printf 'timeshift\n--create\n--comments\n%s\n==\n' "${comment}"
+    printf 'timeshift\n--list\n==\n'
+  } > "${argv_log}.expected"
+  if [[ -f "${argv_log}" ]] && cmp -s "${argv_log}" "${argv_log}.expected"; then
+    pass "hostile comment (${slug}) reaches sudo as exactly three argv calls with the comment as ONE word"
+  else
+    fail "hostile comment (${slug}) argv proof (got: $(cat "${argv_log}" 2>/dev/null))"
+  fi
+  {
+    printf 'arg1=--list\n==\n'
+    printf 'arg1=--create\narg2=--comments\narg3=%s\n==\n' "${comment}"
+    printf 'arg1=--list\n==\n'
+  } > "${ts_log}.expected"
+  if [[ -f "${ts_log}" ]] && cmp -s "${ts_log}" "${ts_log}.expected"; then
+    pass "hostile comment (${slug}) arrives at timeshift as exactly its third argument and nothing else"
+  else
+    fail "hostile comment (${slug}) timeshift argv proof (got: $(cat "${ts_log}" 2>/dev/null))"
+  fi
+}
+
+bv_tg_case "family photos backup" "spaces"
+bv_tg_case "it's \$HOME; reboot" "hostile1"
+bv_tg_case 'say "hi; there" now' "hostile2"
+
+# book-access-doctor undo with a recorded mount target containing a space:
+# the recorded target must reach the stub mount as ONE argv word, and the
+# display must quote it.
+BV_BK_BIN="${TMPBASE}/bv-bin-bk"
+bk_make_bin "${BV_BK_BIN}" >/dev/null
+cp "${BK_STUB_ROOT}/findmnt" "${BK_STUB_ROOT}/mount" "${BV_BK_BIN}/"
+cat <<'BV_SUDO_STUB' > "${BV_BK_BIN}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+ARGVLOG="${MB_ARGV_SUDO_LOG:-}"
+if [[ -n "${ARGVLOG}" && "$#" -gt 0 ]]; then
+  printf '%s\n' "$@" >> "${ARGVLOG}"
+  printf '==\n' >> "${ARGVLOG}"
+fi
+exec "$@"
+BV_SUDO_STUB
+chmod +x "${BV_BK_BIN}/sudo"
+BV_BK_HOME="${TMPBASE}/bv-home-bk"
+BV_BK_TABLE="${TMPBASE}/bv-bk-table.txt"
+BV_BK_ARGV="${TMPBASE}/bv-bk-argv.log"
+BV_BK_TARGET="/media/user/MY KINDLE"
+mkdir -p "${BV_BK_HOME}/.local/state/mintbutler/book-access-doctor"
+printf 'target=%s\n' "${BV_BK_TARGET}" > "${BV_BK_HOME}/${BK_STATE_REL}"
+printf 'prev_opts=ro,nosuid,nodev,relatime\n' >> "${BV_BK_HOME}/${BK_STATE_REL}"
+printf '/|/dev/nvme0n1p2|ext4|rw,relatime\n/media/user/MY KINDLE|/dev/sdb1|vfat|rw,nosuid,nodev,relatime\n' > "${BV_BK_TABLE}"
+rm -f "${BV_BK_ARGV}"
+bv_bk_out=""
+bv_bk_code="0"
+bv_bk_out="$(PATH="${BV_BK_BIN}" HOME="${BV_BK_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BV_BK_TABLE}" MB_ARGV_SUDO_LOG="${BV_BK_ARGV}" \
+  bash "${BK_MODULE}" undo < /dev/null 2>&1)" || bv_bk_code="$?"
+if [[ "${bv_bk_code}" -eq 0 ]]; then
+  pass "book undo with a space-containing recorded target exits 0"
+else
+  fail "book undo with a space-containing recorded target exits 0 (got ${bv_bk_code}: ${bv_bk_out})"
+fi
+{
+  printf 'mount\n-o\nremount,ro\n%s\n==\n' "${BV_BK_TARGET}"
+} > "${BV_BK_ARGV}.expected"
+if [[ -f "${BV_BK_ARGV}" ]] && cmp -s "${BV_BK_ARGV}" "${BV_BK_ARGV}.expected"; then
+  pass "the space-containing mount target reaches the stub mount as exactly ONE argv word"
+else
+  fail "the space-containing mount target reaches the stub mount as exactly ONE argv word (got: $(cat "${BV_BK_ARGV}" 2>/dev/null))"
+fi
+if printf '%s\n' "${bv_bk_out}" | grep -Fxq "Elevated step: sudo mount -o remount,ro '/media/user/MY KINDLE'"; then
+  pass "the display of the space-containing target is the single-quoted form a human would type"
+else
+  fail "the display of the space-containing target is the single-quoted form a human would type (got: ${bv_bk_out})"
+fi
+if grep -Fq "/media/user/MY KINDLE|/dev/sdb1|vfat|ro," "${BV_BK_TABLE}"; then
+  pass "the stub remount flipped the space-containing target row to read-only"
+else
+  fail "the stub remount flipped the space-containing target row to read-only (got: $(cat "${BV_BK_TABLE}"))"
+fi
 
 # ---------------------------------------------------------------------------
 # Stage (bw): the menu-confirmation law (MODULE_SPEC §3, MB-004) at the menu

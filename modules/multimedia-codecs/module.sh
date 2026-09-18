@@ -87,7 +87,7 @@ plan() {
   printf '   gstreamer1.0-libav, libavcodec-extra.\n'
   printf '3. Nothing missing -> honest verdict: already installed, nothing to do.\n'
   printf '4. Some missing -> show installed vs missing and the exact elevated command:\n'
-  printf '   %s\n' "$(elevate_command_line "apt-get install -y <missing...>")"
+  printf '   %s\n' "$(elevate_command_line apt-get install -y "<missing...>")"
   printf '   plus the no-undo notice, then install immediately — the menu took the one\n'
   printf '   confirmation for this run before launch; this module asks nothing.\n'
   printf '5. Verify every installed package again with dpkg -s; report per-package\n'
@@ -103,8 +103,8 @@ dry_run() {
   printf '\n'
   printf 'Exact commands (nothing runs now; <missing...> = what dpkg -s reports missing):\n'
   printf '  dpkg -s <package>   (read-only status check; repeated to verify)\n'
-  printf '  %s   (the only elevated step; the menu confirmed this run)\n' "$(elevate_command_line "apt-get install -y <missing...>")"
-  printf '  removal display after success: %s   (never run here)\n' "$(elevate_command_line "apt-get remove <installed...>")"
+  printf '  %s   (the only elevated step; the menu confirmed this run)\n' "$(elevate_command_line apt-get install -y "<missing...>")"
+  printf '  removal display after success: %s   (never run here)\n' "$(elevate_command_line apt-get remove "<installed...>")"
   printf '  undo: none — package installs are not undone by this module\n'
 }
 
@@ -157,13 +157,14 @@ run() {
     printf '  installed: none of the curated packages\n'
   fi
   printf '  missing:   %s\n' "$(join_comma "${missing[@]}")"
-  local install_command="apt-get install -y ${missing[*]}"
-  printf '  the single elevated step runs now: %s\n' "$(elevate_command_line "${install_command}")"
+  printf '  the single elevated step runs now: %s\n' "$(elevate_command_line apt-get install -y "${missing[@]}")"
   printf '  Notice: these installs are not undone by mintbutler; the removal command is printed after a successful install.\n'
 
   # (v) the ONE elevated step: install exactly the missing curated packages.
+  # Each name travels as ONE argv word to sudo (MB-001); the display above is
+  # derived from the same list.
   local install_code=0
-  elevate_run "${install_command}" || install_code="$?"
+  elevate_run apt-get install -y "${missing[@]}" || install_code="$?"
   if [[ "${install_code}" -ne 0 ]]; then
     printf 'The elevated apt-get step failed (exit %d); no result is claimed.\n' "${install_code}" >&2
     exit 1
@@ -184,8 +185,7 @@ run() {
     for pkg in "${now_installed[@]}"; do
       printf '  %s — installed\n' "${pkg}"
     done
-    local remove_command="apt-get remove ${now_installed[*]}"
-    printf 'Manual removal (never run by this module): %s\n' "$(elevate_command_line "${remove_command}")"
+    printf 'Manual removal (never run by this module): %s\n' "$(elevate_command_line apt-get remove "${now_installed[@]}")"
     printf 'Reminder: package installs are not undone by mintbutler — the removal command above is the honest way back.\n'
     exit 0
   fi
@@ -203,8 +203,7 @@ run() {
   printf 'Hint: no apt-get update runs — the install used the cached package lists.\n'
   printf 'Refresh the software sources (Update Manager), check the network, then re-run this module.\n'
   if [[ "${#now_installed[@]}" -gt 0 ]]; then
-    local remove_command="apt-get remove ${now_installed[*]}"
-    printf 'Manual removal for what did install (never run by this module): %s\n' "$(elevate_command_line "${remove_command}")"
+    printf 'Manual removal for what did install (never run by this module): %s\n' "$(elevate_command_line apt-get remove "${now_installed[@]}")"
     printf 'Reminder: package installs are not undone by mintbutler.\n'
   fi
   printf 'Some curated codec packages are still missing after the elevated install.\n' >&2

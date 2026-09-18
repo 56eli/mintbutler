@@ -40,12 +40,11 @@ set -euo pipefail
 # path; it is unset on a real system, so there the probe is exactly
 # `test -w "<target>"`. Every reported path stays the real one.
 #
-# Elevated-command note: every elevated command is DISPLAYED through
-# lib/elevate.sh's elevate_command_line with its target shell-quoted, which is
-# what a human would type. The command STRING handed to elevate_run carries the
-# same target unquoted, because that helper splits the string into words itself
-# and never runs a shell — quotes inside it would reach mount as literal
-# characters and the real remount would fail.
+# Elevated-command note: every elevated command travels as an ARGV LIST from
+# this module to sudo (lib/elevate.sh, MB-001) — the target is one argv word,
+# so spaces or shell metacharacters in it can never smuggle extra words. The
+# displayed command line is DERIVED from that same list, quoting only the
+# words that need it, exactly as a human would type them.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${MINTBUTLER_LIB_DIR:-$(cd "${SCRIPT_DIR}/../../lib" && pwd)}"
@@ -251,9 +250,9 @@ dry_run() {
   printf 'Exact commands (nothing runs now; values as read):\n'
   printf "  findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS, then -o OPTIONS '<target>'  (read-only)\n"
   printf '  %s   (the only elevated step; the menu confirmed this run)\n' \
-    "$(elevate_command_line "mount -o remount,rw '<target>'")"
+    "$(elevate_command_line mount -o remount,rw "<target>")"
   printf '  undo: %s   (from the record)\n' \
-    "$(elevate_command_line "mount -o remount,ro '<target>'")"
+    "$(elevate_command_line mount -o remount,ro "<target>")"
   printf '  state: %s is written before the remount and deleted by undo\n' "${STATE_FILE}"
 }
 
@@ -346,7 +345,7 @@ run() {
   printf '\nThis mount is the repairable culprit here:\n'
   printf '  current:  %s — %s, %s from %s\n' "${target}" "${current_word}" "${fstype}" "${source}"
   printf '  proposed: the same mount remounted read-write (rw); nothing else about it changes\n'
-  printf '  command:  %s\n' "$(elevate_command_line "mount -o remount,rw '${target}'")"
+  printf '  command:  %s\n' "$(elevate_command_line mount -o remount,rw "${target}")"
   if has_option "${options}" rw; then
     printf '  note:     this mount already reports read-write, so a remount may change nothing — the refusal comes from the device or its filesystem, and mintbutler changes no permission anywhere.\n'
   fi
@@ -363,12 +362,10 @@ run() {
   } > "${STATE_FILE}"
   printf 'Recorded the previous mount options in %s\n' "${STATE_FILE}"
 
-  # The single elevated step. lib/elevate.sh splits the command string into
-  # words itself and never runs a shell, so the target is passed unquoted here
-  # while the human-facing display above shows the shell-quoted form of exactly
-  # the same command.
+  # The single elevated step. The target is ONE argv word from here to sudo
+  # (MB-001); the human-facing display above is derived from the same list.
   local remount_code=0
-  elevate_run "mount -o remount,rw ${target}" || remount_code="$?"
+  elevate_run mount -o remount,rw "${target}" || remount_code="$?"
   if [[ "${remount_code}" -ne 0 ]]; then
     printf 'The remount failed (the elevated command exited %d); the record is kept at %s — undo can remount read-only to restore the previous state.\n' "${remount_code}" "${STATE_FILE}" >&2
     exit 1
@@ -440,13 +437,12 @@ undo() {
   esac
 
   printf 'Undoing the remount: %s goes back to the read-only state it had before the repair.\n' "${rec_target}"
-  printf 'Elevated step: %s\n' "$(elevate_command_line "mount -o remount,ro '${rec_target}'")"
+  printf 'Elevated step: %s\n' "$(elevate_command_line mount -o remount,ro "${rec_target}")"
 
-  # lib/elevate.sh splits the command string into words itself, so the recorded
-  # target is passed unquoted here; the display above is the quoted form of the
-  # very same command.
+  # The recorded target is ONE argv word here (MB-001); the display above is
+  # derived from the very same list.
   local undo_code=0
-  elevate_run "mount -o remount,ro ${rec_target}" || undo_code="$?"
+  elevate_run mount -o remount,ro "${rec_target}" || undo_code="$?"
   if [[ "${undo_code}" -ne 0 ]]; then
     printf 'Could not remount %s read-only (the elevated command exited %d); the record is kept at %s.\n' "${rec_target}" "${undo_code}" "${STATE_FILE}" >&2
     return 1

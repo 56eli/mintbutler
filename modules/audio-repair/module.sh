@@ -35,8 +35,6 @@ source "${LIB_DIR}/elevate.sh"
 
 # The only elevated command this module ever runs (fixed, reviewed,
 # read-only). The privileged prefix lives only in lib/elevate.sh.
-DMESG_COMMAND="dmesg"
-
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mintbutler/audio-repair"
 STATE_FILE="${STATE_DIR}/mixer.record"
 
@@ -51,7 +49,7 @@ plan() {
   printf '3. List output devices with: pactl list short sinks\n'
   printf '4. No real device (or only a dummy one) -> scan the kernel log for\n'
   printf '   driver/firmware errors via one read-only elevated step:\n'
-  printf '   %s\n' "$(elevate_command_line "${DMESG_COMMAND}")"
+  printf '   %s\n' "$(elevate_command_line dmesg)"
   printf '   Evidence found -> newer-kernel/firmware verdict; nothing is changed.\n'
   printf '5. A device is present -> read the Master mixer control with: amixer\n'
   printf '   Healthy chain -> honest verdict, nothing is changed.\n'
@@ -68,7 +66,7 @@ dry_run() {
   printf '  pactl info\n'
   printf '  pactl list short sinks\n'
   printf '  amixer\n'
-  printf '  %s   (read-only kernel-log scan; the only elevated step)\n' "$(elevate_command_line "${DMESG_COMMAND}")"
+  printf '  %s   (read-only kernel-log scan; the only elevated step)\n' "$(elevate_command_line dmesg)"
   printf '  amixer -q sset Master <volume>%% unmute   (only after your confirmation)\n'
   printf '  undo: amixer -q sset Master <recorded volume>%% + the recorded mute flag\n'
   printf '  state: %s is written before the repair and removed by undo\n' "${STATE_FILE}"
@@ -233,9 +231,9 @@ run() {
       printf '  Output devices: none found.\n'
     fi
     printf '  Checking the kernel log for driver or firmware errors.\n'
-    printf '  Read-only elevated step: %s\n' "$(elevate_command_line "${DMESG_COMMAND}")"
+    printf '  Read-only elevated step: %s\n' "$(elevate_command_line dmesg)"
     local dmesg_out="" dmesg_code=0
-    dmesg_out="$(elevate_run "${DMESG_COMMAND}")" || dmesg_code="$?"
+    dmesg_out="$(elevate_run dmesg)" || dmesg_code="$?"
     if [[ "${dmesg_code}" -ne 0 ]]; then
       printf 'Could not read the kernel log: the elevated dmesg step failed (exit %d); no changes were made and nothing was written.\n' "${dmesg_code}" >&2
       exit 1
