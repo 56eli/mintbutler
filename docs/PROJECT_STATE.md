@@ -33,8 +33,8 @@ Canonical project tracker.
 
 ## 4. Active Milestone & Current State
 - **Active Milestone:** Module batch #1 (owner-approved 2026-09-16): nine modules — seven features, two fixes — one reviewed PR at a time on the v0.1 core.
-- **Current State:** v0.1 core complete; batch #1 in progress — screenshot-studio (PR #5), orchestrator spec + `bin/orchestrator-check` gate (PR #6), default-apps-editor (PR #7), appimage-installer (PRs #8/#9), timeshift-guardian (PR #10), audio-repair (PR #11), multimedia-codecs (PR #12) landed.
-- **Immediate Next Task:** task 016 — module `system-report-pack` (honest system report, never installs inxi), eighth in the owner's revised build order.
+- **Current State:** v0.1 core complete; batch #1 in progress — screenshot-studio (PR #5), orchestrator spec + `bin/orchestrator-check` gate (PR #6), default-apps-editor (PR #7), appimage-installer (PRs #8/#9), timeshift-guardian (PR #10), audio-repair (PR #11), multimedia-codecs (PR #12), printer-helper (PR #13) landed.
+- **Immediate Next Task:** task 017 — module `book-access-doctor` (fix kind: remount-as-elevated OK, persistent fstab edits OUT — print only, targeted grants only — NEVER `chmod -R 777`), ninth and final in the owner's revised build order.
 
 ## 5. Module Backlog
 - **post-update-doctor** (recorded 2026-09-16 — backlog stub, NOT implemented; deliberately no module folder): post-update regressions — Bluetooth autostart lost, NVIDIA fallback → wrong resolution, monitors mis-detected. Becomes a real task prompt when the chore bites.
