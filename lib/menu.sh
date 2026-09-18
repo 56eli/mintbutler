@@ -2,8 +2,11 @@
 set -euo pipefail
 
 # lib/menu.sh — module scan, light validation, (order, slug) sort,
-# numbered rendering incl. broken section; search-filter support.
-# Expects lib/ui.sh, lib/manifest.sh, and lib/picker.sh to be sourced first.
+# numbered rendering incl. broken section; search-filter support; missing
+# `needs:` computation per module (the menu refuses to launch what the host
+# cannot run — MODULE_SPEC §2, MB-003/MB-005).
+# Expects lib/ui.sh, lib/manifest.sh, lib/picker.sh, and lib/needs.sh to be
+# sourced first.
 
 MENU_SLUGS=()
 MENU_TITLES=()
@@ -11,6 +14,7 @@ MENU_RISKS=()
 MENU_UNDOS=()
 MENU_ORDERS=()
 MENU_DESCS=()
+MENU_NEEDS_MISSING=()
 MENU_BROKEN_SLUGS=()
 MENU_MODULES_DIR=""
 MENU_FILTER=""
@@ -52,6 +56,7 @@ menu_scan() {
   MENU_UNDOS=()
   MENU_ORDERS=()
   MENU_DESCS=()
+  MENU_NEEDS_MISSING=()
   MENU_BROKEN_SLUGS=()
   MENU_MODULES_DIR="${modules_dir}"
 
@@ -68,6 +73,7 @@ menu_scan() {
   local -a undos=()
   local -a orders=()
   local -a descs=()
+  local -a needs_missing=()
   local -a broken=()
 
   local entry slug manifest module_sh
@@ -96,6 +102,7 @@ menu_scan() {
       undos+=("${MANIFEST_UNDO}")
       orders+=("${MANIFEST_ORDER}")
       descs+=("${MANIFEST_DESCRIPTION}")
+      needs_missing+=("$(needs_missing_list "${MANIFEST_NEEDS}")")
     else
       broken+=("${slug}")
       continue
@@ -127,6 +134,7 @@ menu_scan() {
       MENU_UNDOS+=("${undos[${idx}]}")
       MENU_ORDERS+=("${orders[${idx}]}")
       MENU_DESCS+=("${descs[${idx}]}")
+      MENU_NEEDS_MISSING+=("${needs_missing[${idx}]}")
     done <<< "${sorted}"
   fi
 
@@ -221,6 +229,20 @@ menu_undo_for_slug() {
     fi
   done
   return 1
+}
+
+# menu_missing_needs_for_slug SLUG — the comma-space-joined list of declared
+# needs absent on this host (empty when the module is ready to launch).
+menu_missing_needs_for_slug() {
+  local want="${1:-}" i
+  for i in "${!MENU_SLUGS[@]}"; do
+    if [[ "${MENU_SLUGS[${i}]}" == "${want}" ]]; then
+      printf '%s' "${MENU_NEEDS_MISSING[${i}]:-}"
+      return 0
+    fi
+  done
+  printf ''
+  return 0
 }
 
 menu_render() {

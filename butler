@@ -29,6 +29,10 @@ if [[ ! -f "${LIB_DIR}/menu.sh" ]]; then
   printf 'Error: missing lib/menu.sh\n' >&2
   exit 1
 fi
+if [[ ! -f "${LIB_DIR}/needs.sh" ]]; then
+  printf 'Error: missing lib/needs.sh\n' >&2
+  exit 1
+fi
 
 # shellcheck source=lib/ui.sh
 source "${LIB_DIR}/ui.sh"
@@ -40,6 +44,8 @@ source "${LIB_DIR}/confirm.sh"
 source "${LIB_DIR}/picker.sh"
 # shellcheck source=lib/menu.sh
 source "${LIB_DIR}/menu.sh"
+# shellcheck source=lib/needs.sh
+source "${LIB_DIR}/needs.sh"
 
 trap 'printf "\n"; exit 0' INT
 
@@ -180,6 +186,15 @@ butler_run() {
     butler_dispatch "${slug}" "dry-run"
     return "$?"
   fi
+  # needs: gate (MODULE_SPEC §2, MB-003/MB-005): a module whose declared
+  # needs are absent on this host never launches — one plain line names the
+  # missing need and the menu refuses. dry-run above stays allowed.
+  local missing_needs
+  missing_needs="$(menu_missing_needs_for_slug "${slug}")"
+  if [[ -n "${missing_needs}" ]]; then
+    printf "%s: not ready — missing need: %s\n" "${slug}" "${missing_needs}" >&2
+    return 1
+  fi
   if ! butler_dispatch "${slug}" "plan"; then
     return 1
   fi
@@ -274,6 +289,13 @@ butler_detail() {
         butler_pause_if_tty
         ;;
       r|run)
+        local missing_needs
+        missing_needs="$(menu_missing_needs_for_slug "${slug}")"
+        if [[ -n "${missing_needs}" ]]; then
+          printf "%s: not ready — missing need: %s\n" "${slug}" "${missing_needs}"
+          butler_pause_if_tty
+          continue
+        fi
         if ! butler_dispatch "${slug}" "plan"; then
           butler_pause_if_tty
           continue
@@ -297,6 +319,13 @@ butler_detail() {
       u|undo)
         if [[ "${undo}" != "true" ]]; then
           ui_error "Undo is not available for this module."
+          butler_pause_if_tty
+          continue
+        fi
+        local missing_needs
+        missing_needs="$(menu_missing_needs_for_slug "${slug}")"
+        if [[ -n "${missing_needs}" ]]; then
+          printf "%s: not ready — missing need: %s\n" "${slug}" "${missing_needs}"
           butler_pause_if_tty
           continue
         fi

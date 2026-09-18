@@ -3,6 +3,14 @@ set -euo pipefail
 
 # bin/modulelint — the module contract validator for mintbutler.
 # Mechanically enforces MODULE_SPEC §5.
+#
+# Beyond §5 it also enforces, mechanically and offline:
+#   - the 23-line law (owner ruling 2026-09-18, MB-003): describe/plan/dry-run
+#     stdout must never render more than 23 terminal lines (strict line count);
+#   - the needs: advisory (MB-005): a module whose declared needs are absent
+#     on this host still LINTS (it is honest that it needs them), but the
+#     report carries a non-fatal `WARN <slug>: missing need: <need>` line —
+#     the same shape the menu uses when it refuses to launch the module.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -13,9 +21,15 @@ if [[ ! -f "${LIB_DIR}/manifest.sh" ]]; then
   printf 'Error: missing lib/manifest.sh\n' >&2
   exit 1
 fi
+if [[ ! -f "${LIB_DIR}/needs.sh" ]]; then
+  printf 'Error: missing lib/needs.sh\n' >&2
+  exit 1
+fi
 
 # shellcheck source=lib/manifest.sh
 source "${LIB_DIR}/manifest.sh"
+# shellcheck source=lib/needs.sh
+source "${LIB_DIR}/needs.sh"
 
 TIMEOUT_ADVISED=0
 
@@ -365,6 +379,7 @@ check_strace_containment() {
 lint_module() {
   local slug="${1}"
   local module_dir="${MODULES_DIR}/${slug}"
+  local lint_lines=""
 
   # Check 1 — Manifest & slug (spec §5.1)
   if [[ ! "${slug}" =~ ^[a-z0-9-]+$ ]]; then
@@ -386,6 +401,14 @@ lint_module() {
   if ! manifest_parse "${manifest_file}"; then
     printf 'FAIL %s: manifest error: %s\n' "${slug}" "${MANIFEST_ERROR}"
     return 1
+  fi
+
+  # needs: advisory (MB-005) — non-fatal; the menu refuses to launch the
+  # module on this host while the need is absent.
+  local lint_missing_needs=""
+  lint_missing_needs="$(needs_missing_list "${MANIFEST_NEEDS}")"
+  if [[ -n "${lint_missing_needs}" ]]; then
+    printf 'WARN %s: missing need: %s\n' "${slug}" "${lint_missing_needs}"
   fi
 
   local script_file="${module_dir}/module.sh"
@@ -467,6 +490,11 @@ lint_module() {
     printf "FAIL %s: action 'describe' exited with code %d\n" "${slug}" "${describe_code}"
     return 1
   fi
+  lint_lines="$(wc -l < "${sandbox_root}/describe.stdout" | tr -d '[:space:]')"
+  if [[ "${lint_lines}" -gt 23 ]]; then
+    printf "FAIL %s: action 'describe' renders %s lines — over the 23-line law\n" "${slug}" "${lint_lines}"
+    return 1
+  fi
 
   # Execute plan
   local plan_code=0
@@ -477,6 +505,11 @@ lint_module() {
   fi
   if [[ "${plan_code}" -ne 0 ]]; then
     printf "FAIL %s: action 'plan' exited with code %d\n" "${slug}" "${plan_code}"
+    return 1
+  fi
+  lint_lines="$(wc -l < "${sandbox_root}/plan.stdout" | tr -d '[:space:]')"
+  if [[ "${lint_lines}" -gt 23 ]]; then
+    printf "FAIL %s: action 'plan' renders %s lines — over the 23-line law\n" "${slug}" "${lint_lines}"
     return 1
   fi
 
@@ -500,6 +533,11 @@ lint_module() {
   trimmed_plan="$(trim_string "${dry_out}")"
   if [[ -z "${trimmed_plan}" ]]; then
     printf "FAIL %s: action 'dry-run' produced empty plan\n" "${slug}"
+    return 1
+  fi
+  lint_lines="$(wc -l < "${sandbox_root}/dry-run.stdout" | tr -d '[:space:]')"
+  if [[ "${lint_lines}" -gt 23 ]]; then
+    printf "FAIL %s: action 'dry-run' renders %s lines — over the 23-line law\n" "${slug}" "${lint_lines}"
     return 1
   fi
   if ! diff -r "${sandbox_home}" "${sandbox_root}/home-snap-dry-run" >/dev/null 2>&1; then

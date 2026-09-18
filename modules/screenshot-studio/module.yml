@@ -6,6 +6,6 @@ description: >-
   instead of pretending.
 risk: elevated
 undo: true
-needs: [flameshot]
+needs: []
 asks: 0
 order: 50

@@ -56,6 +56,16 @@ command and the undo statement. `undo: false` must be stated in the
 description in plain words (e.g. "Package installs are not cleanly
 undoable; this module says so instead of pretending.").
 
+`needs:` enforcement (owner ruling 2026-09-18, MB-003/MB-005): entries are
+LAUNCH-TIME requirements — commands the module cannot run without — never a
+shopping list for the module to fetch (a module installs nothing to satisfy
+its own needs; the user does that via Mint's Software Manager, explicitly).
+While any declared need is absent on the host, the menu refuses to launch
+`run`/`undo` with one plain line — `<slug>: not ready — missing need: <need>`
+— and `--scan` reports the non-fatal `WARN <slug>: missing need: <need>`.
+`plan`/`dry-run` stay available: they change nothing and teach the exact
+command to satisfy the need.
+
 ## 3. Script contract (`module.sh`)
 
 Invoked by the menu as:
@@ -140,6 +150,13 @@ Runs on every PR (and via `./butler --scan` locally). A module passes only if:
 5. `run` executed in the same sandbox must either succeed, or fail with a
    plain-language stderr line — and never touch anything outside the
    sandbox HOME (strace/diff verified when available).
+6. 23-line law, fully mechanical (MB-003): `describe`, `plan`, and `dry-run`
+   stdout must each render in at most 23 terminal lines (strict line count,
+   no exceptions). The test suite additionally renders every module's menu
+   screens and applies the same bound.
+7. `needs:` advisory (MB-005): a module whose declared needs are absent on
+   the lint host still PASSES — honesty about a requirement is not a defect —
+   but the report carries `WARN <slug>: missing need: <need>` (non-fatal).
 
 The gate for every module PR = `modulelint` green + orchestrator's
 independent read of the exact commands + owner merge. The same discipline

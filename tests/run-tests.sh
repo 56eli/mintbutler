@@ -6014,6 +6014,162 @@ fi
 
 
 # ---------------------------------------------------------------------------
+# Stage (bs): needs: enforcement (MODULE_SPEC §2, MB-003/MB-005). A module
+# whose declared needs are absent never launches: the menu prints one plain
+# refusal line and exits 1, --scan reports a non-fatal WARN naming the slug,
+# and dry-run stays allowed. Proven with tests/fixtures/modules/needs-fixture,
+# whose need is unsatisfiable by construction — deterministic and offline.
+# ---------------------------------------------------------------------------
+printf 'Stage bs: needs enforcement (fixture with unsatisfiable need)\n'
+
+BS_STAGE="${TMPBASE}/bs-stage"
+mkdir -p "${BS_STAGE}"
+cp -a "${REPO_ROOT}/butler" "${BS_STAGE}/"
+cp -a "${REPO_ROOT}/lib" "${BS_STAGE}/"
+cp -a "${REPO_ROOT}/bin" "${BS_STAGE}/"
+mkdir -p "${BS_STAGE}/modules"
+cp -a "${REPO_ROOT}/tests/fixtures/modules/." "${BS_STAGE}/modules/"
+chmod +x "${BS_STAGE}/butler" "${BS_STAGE}/bin/modulelint"
+
+output_bs_lint1=""
+code_bs_lint1="0"
+output_bs_lint1="$(cd "${BS_STAGE}" && bin/modulelint needs-fixture 2>&1)" || code_bs_lint1="$?"
+if [[ "${code_bs_lint1}" -eq 0 ]] \
+  && printf '%s\n' "${output_bs_lint1}" | grep -Fxq "WARN needs-fixture: missing need: mb-test-need-does-not-exist" \
+  && printf '%s\n' "${output_bs_lint1}" | grep -q "PASS needs-fixture"; then
+  pass "modulelint warns about the missing need and still passes the honest module"
+else
+  fail "modulelint warns about the missing need and still passes the honest module (got ${code_bs_lint1}: ${output_bs_lint1})"
+fi
+
+output_bs_scan=""
+code_bs_scan="0"
+output_bs_scan="$(cd "${BS_STAGE}" && ./butler --scan 2>&1)" || code_bs_scan="$?"
+if [[ "${code_bs_scan}" -eq 1 ]] \
+  && printf '%s\n' "${output_bs_scan}" | grep -Fxq "WARN needs-fixture: missing need: mb-test-need-does-not-exist" \
+  && printf '%s\n' "${output_bs_scan}" | grep -q "PASS needs-fixture"; then
+  pass "--scan reports the needs WARN with the module slug (and the module passes)"
+else
+  fail "--scan reports the needs WARN with the module slug (got ${code_bs_scan}: ${output_bs_scan})"
+fi
+
+output_bs_run=""
+code_bs_run="0"
+output_bs_run="$(cd "${BS_STAGE}" && ./butler --run needs-fixture 2>&1)" || code_bs_run="$?"
+bs_run_lines="$(printf '%s\n' "${output_bs_run}" | grep -c . || true)"
+if [[ "${code_bs_run}" -eq 1 && "${bs_run_lines}" -eq 1 ]] \
+  && printf '%s\n' "${output_bs_run}" | grep -Fxq "needs-fixture: not ready — missing need: mb-test-need-does-not-exist"; then
+  pass "the menu refuses to launch a module with an unsatisfiable need — one plain line, exit 1"
+else
+  fail "the menu refuses to launch a module with an unsatisfiable need (got ${code_bs_run}/${bs_run_lines}: ${output_bs_run})"
+fi
+
+output_bs_dry=""
+code_bs_dry="0"
+output_bs_dry="$(cd "${BS_STAGE}" && ./butler --run needs-fixture --dry-run 2>&1)" || code_bs_dry="$?"
+if [[ "${code_bs_dry}" -eq 0 ]] \
+  && printf '%s\n' "${output_bs_dry}" | grep -q "Plan for needs-fixture" \
+  && printf '%s\n' "${output_bs_dry}" | grep -q "Commands: none"; then
+  pass "dry-run stays allowed while the need is missing (nothing is launched)"
+else
+  fail "dry-run stays allowed while the need is missing (got ${code_bs_dry}: ${output_bs_dry})"
+fi
+
+output_bs_menu=""
+code_bs_menu="0"
+output_bs_menu="$(printf '/needs\n1\nr\nb\nq\n' | (cd "${BS_STAGE}" && ./butler) 2>&1)" || code_bs_menu="$?"
+bs_menu_yn="$(printf '%s\n' "${output_bs_menu}" | grep -c '\[y/N\]' || true)"
+if [[ "${code_bs_menu}" -eq 0 ]] \
+  && printf '%s\n' "${output_bs_menu}" | grep -Fq "needs-fixture: not ready — missing need: mb-test-need-does-not-exist" \
+  && [[ "${bs_menu_yn}" -eq 0 ]]; then
+  pass "the interactive menu prints the one plain refusal line and never reaches a confirmation"
+else
+  fail "the interactive menu prints the one plain refusal line and never reaches a confirmation (got ${code_bs_menu})"
+fi
+
+# ---------------------------------------------------------------------------
+# Stage (bt): the 23-line law over EVERY rendered screen of every real module
+# (MODULE_SPEC §4, MB-003). For each module the menu is driven to the detail
+# screen, r is pressed, and whatever confirmation family appears is declined
+# ('n' answers [y/N] with a decline and is never the typed slug). Every
+# screen between prompt anchors must fit 23 terminal lines. Modules with a
+# missing need render the one-line refusal screen — same bound. plan and
+# dry-run output is independently bounded by modulelint's strict check.
+# ---------------------------------------------------------------------------
+printf 'Stage bt: 23-line law across every module screen\n'
+
+BT_AWK='
+BEGIN { plen = length(prompt) }
+{
+  if (buf == "") buf = $0; else buf = buf "\n" $0
+  idx = index(buf, prompt)
+  while (idx > 0) {
+    screen = substr(buf, 1, idx - 1)
+    buf = substr(buf, idx + plen)
+    print "===SCREEN_START==="
+    print screen
+    print "===SCREEN_END==="
+    idx = index(buf, prompt)
+  }
+}
+'
+
+# bt_check_module_screens SLUG — pass/fail one module's whole screen flow.
+bt_check_module_screens() {
+  local slug="${1:-}"
+  local raw="" normalized=""
+  raw="$(printf '/%s\n1\nr\nn\nb\nq\n' "${slug}" | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || {
+    fail "menu drive-through for ${slug} completes (23-line law sweep)"
+    return 0
+  }
+  normalized="$(printf '%s' "${raw}" | sed \
+    -e 's|Select a task number (or: n next  p prev  /search  r refresh  q quit): |@@P@@|g' \
+    -e 's|Choose an action: |@@P@@|g' \
+    -e "s|Type the module slug '[^']*' to confirm: |@@P@@|g" \
+    -e 's|\[y/N\]: |@@P@@|g')"
+  local max_lines=0 screens=0 line_cnt=""
+  local current_screen="" in_screen=0 rline=""
+  while IFS= read -r rline; do
+    if [[ "${rline}" == "===SCREEN_START===" ]]; then
+      in_screen=1
+      current_screen=""
+      continue
+    fi
+    if [[ "${rline}" == "===SCREEN_END===" ]]; then
+      in_screen=0
+      screens=$(( screens + 1 ))
+      if [[ -z "${current_screen}" ]]; then
+        line_cnt=0
+      else
+        line_cnt="$(printf '%s\n' "${current_screen}" | wc -l)"
+      fi
+      if (( line_cnt > max_lines )); then
+        max_lines=${line_cnt}
+      fi
+      continue
+    fi
+    if [[ "${in_screen}" -eq 1 ]]; then
+      if [[ -z "${current_screen}" ]]; then
+        current_screen="${rline}"
+      else
+        current_screen="${current_screen}"$'\n'"${rline}"
+      fi
+    fi
+  done < <(awk -v prompt='@@P@@' "${BT_AWK}" <<< "${normalized}")
+  if (( screens >= 3 && max_lines <= 23 )); then
+    pass "23-line law holds across ${slug} menu screens (max ${max_lines} over ${screens} screens)"
+  else
+    fail "23-line law holds across ${slug} menu screens (max ${max_lines} over ${screens} screens)"
+  fi
+}
+
+for bt_slug in appimage-installer audio-repair book-access-doctor default-apps-editor \
+  desktop-shortcut-creator multimedia-codecs printer-helper screenshot-studio \
+  system-report-pack timeshift-guardian; do
+  bt_check_module_screens "${bt_slug}"
+done
+
+# ---------------------------------------------------------------------------
 # Stage (bw): the menu-confirmation law (MODULE_SPEC §3, MB-004) at the menu
 # level. Exactly ONE confirmation per repair launch, and the module asks
 # nothing after that. Three proofs:
