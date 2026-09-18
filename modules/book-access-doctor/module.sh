@@ -79,6 +79,145 @@ remountable_list() {
   printf '%s' "${out}"
 }
 
+trim_ws() {
+  local s="${1:-}"
+  # shellcheck disable=SC2295
+  s="${s#"${s%%[![:space:]]*}"}"
+  # shellcheck disable=SC2295
+  s="${s%"${s##*[![:space:]]}"}"
+  printf '%s' "${s}"
+}
+
+# has_option OPTIONS OPTION — true when OPTION is one of the comma-separated
+# mount options in OPTIONS. This is an exact token match on purpose: ext4 rows
+# carry errors=remount-ro, which must never be read as a read-only mount.
+has_option() {
+  local options="${1:-}" want="${2:-}" part
+  local -a parts=()
+  IFS=',' read -r -a parts <<< "${options}" || true
+  for part in "${parts[@]}"; do
+    if [[ "${part}" == "${want}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# fstype_is_remountable FSTYPE — true when FSTYPE (case-insensitive) is one of
+# the types a read-write remount can genuinely help.
+fstype_is_remountable() {
+  local fstype entry
+  fstype="$(printf '%s' "${1:-}" | tr '[:upper:]' '[:lower:]')"
+  for entry in "${REMOUNTABLE_FSTYPES[@]}"; do
+    if [[ "${fstype}" == "${entry}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Parsed rows of the last discovery read — one entry per removable mount, in
+# discovery order.
+MOUNT_TARGETS=()
+MOUNT_SOURCES=()
+MOUNT_FSTYPES=()
+MOUNT_OPTIONS=()
+MOUNT_WRITABLE=()
+
+# parse_mount_rows TEXT — fill the arrays above from `findmnt -n -o
+# TARGET,SOURCE,FSTYPE,OPTIONS` output, keeping ONLY the rows whose target is
+# under /media/ or /run/media/ (Mint's automount roots for removable devices).
+#
+# Parsing note: findmnt pads its columns and, in its default tree view, prefixes
+# child targets with decoration such as "| |-". OPTIONS, FSTYPE and SOURCE are
+# single whitespace-free tokens, so they are taken from the right of the row and
+# the target keeps the remainder — a mount point may legitimately contain
+# spaces, and the decoration is dropped before the /media prefix filter runs.
+parse_mount_rows() {
+  local text="${1:-}"
+  MOUNT_TARGETS=()
+  MOUNT_SOURCES=()
+  MOUNT_FSTYPES=()
+  MOUNT_OPTIONS=()
+  MOUNT_WRITABLE=()
+
+  local line
+  while IFS= read -r line || [[ -n "${line}" ]]; do
+    if [[ -z "$(trim_ws "${line}")" ]]; then
+      continue
+    fi
+    local -a words=()
+    read -r -a words <<< "${line}" || true
+    if [[ "${#words[@]}" -lt 4 ]]; then
+      continue
+    fi
+    local options="${words[-1]}"
+    local fstype="${words[-2]}"
+    local source="${words[-3]}"
+    local target="" i
+    for (( i = 0; i < ${#words[@]} - 3; i++ )); do
+      if [[ -z "${target}" ]]; then
+        target="${words[i]}"
+      else
+        target="${target} ${words[i]}"
+      fi
+    done
+    case "${target}" in
+      /*)
+        ;;
+      */*)
+        target="/${target#*/}"
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    case "${target}" in
+      /media/*|/run/media/*)
+        ;;
+      *)
+        continue
+        ;;
+    esac
+    local writable="0"
+    if [[ -w "${MOUNT_PROBE_ROOT}${target}" ]]; then
+      writable="1"
+    fi
+    MOUNT_TARGETS+=("${target}")
+    MOUNT_SOURCES+=("${source}")
+    MOUNT_FSTYPES+=("${fstype}")
+    MOUNT_OPTIONS+=("${options}")
+    MOUNT_WRITABLE+=("${writable}")
+  done <<< "${text}"
+  return 0
+}
+
+# report_mounts — the plain-words report of every discovered mount: what it is,
+# where it comes from, how it is mounted, and whether it takes writes now.
+report_mounts() {
+  local total="${#MOUNT_TARGETS[@]}" i mount_word access_word
+  printf '  Removable mounts found under /media or /run/media: %d\n' "${total}"
+  for i in "${!MOUNT_TARGETS[@]}"; do
+    if has_option "${MOUNT_OPTIONS[i]}" ro; then
+      mount_word="mounted read-only (ro)"
+    elif has_option "${MOUNT_OPTIONS[i]}" rw; then
+      mount_word="mounted read-write (rw)"
+    else
+      mount_word="mount options name neither ro nor rw"
+    fi
+    if [[ "${MOUNT_WRITABLE[i]}" == "1" ]]; then
+      access_word="writable right now"
+    else
+      access_word="not writable right now"
+    fi
+    printf '  Mount %d of %d: %s\n' "$((i + 1))" "${total}" "${MOUNT_TARGETS[i]}"
+    printf '    source: %s | filesystem: %s | %s | %s\n' \
+      "${MOUNT_SOURCES[i]}" "${MOUNT_FSTYPES[i]}" "${mount_word}" "${access_word}"
+    printf '    options: %s\n' "${MOUNT_OPTIONS[i]}"
+  done
+  return 0
+}
+
 plan() {
   printf 'Plan for book-access-doctor:\n'
   printf '1. Preflight: findmnt and mount must exist (util-linux ships on Mint); else stop.\n'
@@ -111,6 +250,72 @@ dry_run() {
   printf '  state: %s is written before the remount and deleted by undo\n' "${STATE_FILE}"
 }
 
+run() {
+  # (i) preflight — one plain honest line when the util-linux tools are missing.
+  local missing="" tool
+  for tool in findmnt mount; do
+    if ! command -v "${tool}" >/dev/null 2>&1; then
+      if [[ -z "${missing}" ]]; then
+        missing="${tool}"
+      else
+        missing="${missing}, ${tool}"
+      fi
+    fi
+  done
+  if [[ -n "${missing}" ]]; then
+    printf 'Mount tools missing: %s — findmnt and mount ship with util-linux on Mint; nothing was changed.\n' "${missing}" >&2
+    exit 1
+  fi
+
+  printf 'Book device diagnosis — every step is read-only unless you confirm the one remount.\n'
+
+  # (ii) discover the removable mounts (read-only).
+  local rows="" rows_code=0
+  rows="$(findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS 2>/dev/null)" || rows_code="$?"
+  if [[ "${rows_code}" -ne 0 ]]; then
+    printf 'Verdict: the mount table could not be read (findmnt exited %d), so there is nothing safe to report yet.\n' "${rows_code}"
+    printf 'Give the file manager a moment to settle, or reboot, then re-run this doctor. No changes were made.\n'
+    exit 0
+  fi
+  parse_mount_rows "${rows}"
+
+  # (iii) nothing removable mounted -> plug-it-in guidance; nothing is written
+  # and nothing is asked.
+  if [[ "${#MOUNT_TARGETS[@]}" -eq 0 ]]; then
+    printf 'Verdict: no removable mount found under /media or /run/media — no book device is mounted right now.\n'
+    printf 'Plug the reader in and unlock it (many devices stay locked until you allow the connection on their screen),\n'
+    printf "wait for Mint's file manager to mount it — or click the device there — then re-run this doctor.\n"
+    printf "For automatic mounts use Mint's Disks app: mintbutler never writes /etc/fstab.\n"
+    printf 'No changes were made.\n'
+    exit 0
+  fi
+
+  # (iv) the plain-words report of everything discovered.
+  report_mounts
+
+  # (v) the repair candidate is the FIRST read-only mount in discovery order —
+  # read-only by its options, or simply not writable.
+  local candidate=-1 i
+  for i in "${!MOUNT_TARGETS[@]}"; do
+    if has_option "${MOUNT_OPTIONS[i]}" ro || [[ "${MOUNT_WRITABLE[i]}" == "0" ]]; then
+      candidate="${i}"
+      break
+    fi
+  done
+
+  # (vi) every mount read-write and writable -> healthy verdict, no question,
+  # no elevated call, nothing written.
+  if [[ "${candidate}" -lt 0 ]]; then
+    printf 'Verdict: every book-device mount is read-write and writable — the mounts look healthy.\n'
+    printf 'If a book app still cannot see its files, unplug and replug the device, unlock its screen, then re-run.\n'
+    printf 'No changes were made.\n'
+    exit 0
+  fi
+
+  printf 'A read-only mount was found; the repair path is not implemented yet.\n' >&2
+  exit 1
+}
+
 main() {
   local action="${1:-describe}"
   case "${action}" in
@@ -124,8 +329,7 @@ main() {
       dry_run
       ;;
     run)
-      printf 'run is not implemented yet.\n' >&2
-      exit 1
+      run
       ;;
     undo)
       printf 'undo is not implemented yet.\n' >&2
