@@ -83,6 +83,7 @@ Conventions:
   they must not `eval`, fetch-and-execute (`curl … | bash`), or build
   command strings from input at runtime.
 - A module may ask a short, BOUNDED series of questions, each collecting a value only the user knows. The question budget is declared in the manifest (`asks: <n>`). Optional values accept Enter to skip. Every safety confirmation (risk badge, run/undo, elevated) stays with the menu, never inside the module. Question flows must be testable non-interactively (scripted stdin).
+- **One confirmation per launch, at the menu (owner ruling 2026-09-18, MB-004).** The menu asks exactly one confirmation before a `run`/`undo` (typed slug for `risk: elevated`, one `Run '<slug>'? [y/N]` otherwise) and the module then runs to completion without re-asking anything. A module must never prompt for a y/N or other safety confirmation itself — `asks:` counts value questions only. A module invoked directly (developer lane) therefore also asks no safety question; it simply does its documented work.
 - **User-level first.** No `sudo`/`pkexec` in `risk: low`. `elevated`
   modules use the shared `elevate` helper only (single confirmed, displayed
   step), and only for what genuinely needs it (e.g. `apt-get install` of
@@ -113,7 +114,9 @@ Conventions:
 - On selection: clear screen, show `title`, `description`, risk badge, undo
   statement, then the menu: `[d]ry-run  [r]un  [u]ndo  [b]ack`.
 - `run`/`undo` on `elevated`: show the exact command list, require typed
-  confirmation, then execute with the `elevate` helper.
+  confirmation, then execute with the `elevate` helper. This — and the
+  matching single `[y/N]` for low-risk modules — is the ONLY confirmation of
+  a launch; the module must not ask again (MB-004).
 - Colors: ANSI when `stdout` is a TTY; plain otherwise (SSH/pipe-safe).
 - Flags: `--list` (slugs + titles), `--run <slug>` (with `--dry-run`),
   `--scan` (run modulelint over all modules), `--help`.

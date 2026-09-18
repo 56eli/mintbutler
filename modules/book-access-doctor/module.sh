@@ -8,8 +8,10 @@ set -euo pipefail
 # mount options, writable or not), and delivers an honest verdict.
 #
 # The ONE repair it makes: when a discovered mount is read-only, an elevated
-# `mount -o remount,rw <target>` after ONE confirmation, recorded BEFORE it runs
-# and restorable on undo (undo remounts the same target read-only again).
+# `mount -o remount,rw <target>`, recorded BEFORE it runs and restorable on
+# undo (undo remounts the same target read-only again). This module asks no
+# safety question: the menu takes the single typed-slug confirmation for an
+# elevated run before this module launches (MODULE_SPEC §3, MB-004).
 # Owner rulings this module obeys (2026-09-16, binding):
 #   - remount-as-elevated is fine; the privileged prefix lives only in
 #     lib/elevate.sh, never in this file;
@@ -28,8 +30,8 @@ set -euo pipefail
 #   4. all rw and writable -> healthy verdict, nothing asked, nothing changed
 #   5. first read-only mount -> fstype allowlist check (a read-only medium such
 #      as iso9660 earns an honest not-applicable verdict), then current versus
-#      proposed plus the exact elevated command, ONE confirmation, record,
-#      remount read-write, verify, report
+#      proposed plus the exact elevated command, record, remount read-write,
+#      verify, report
 #   6. undo: remount the recorded target read-only, verify, delete the record
 #
 # Test seam: the writability probe (`test -w <target>`) can be pointed at a
@@ -54,8 +56,6 @@ export MINTBUTLER_MODULE_SLUG="${MINTBUTLER_MODULE_SLUG:-book-access-doctor}"
 
 # shellcheck source=lib/elevate.sh
 source "${LIB_DIR}/elevate.sh"
-# shellcheck source=lib/ask.sh
-source "${LIB_DIR}/ask.sh"
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mintbutler/book-access-doctor"
 STATE_FILE="${STATE_DIR}/remount.record"
@@ -237,8 +237,9 @@ plan() {
   printf '5. A read-only mount -> ONE repair, and only for these filesystem types:\n'
   printf '   %s. A read-only medium such as\n' "$(remountable_list)"
   printf '   iso9660 earns an honest "remounting rw does not apply" verdict instead.\n'
-  printf '   Otherwise: show current versus proposed and the exact elevated command, ask\n'
-  printf '   ONE confirmation; on yes only: record, remount read-write, verify, report.\n'
+  printf '   Otherwise: show current versus proposed and the exact elevated command,\n'
+  printf '   then record, remount read-write, verify, report — the menu took the one\n'
+  printf '   confirmation for this run before launch; this module asks nothing.\n'
   printf '6. Undo remounts the recorded target read-only again, then deletes the record.\n'
   printf '7. mintbutler never writes /etc/fstab — persistent-mount guidance is printed as\n'
   printf '   information only — and never runs chmod or chown: no permission changes.\n'
@@ -248,9 +249,8 @@ dry_run() {
   plan
   printf '\n'
   printf 'Exact commands (nothing runs now; values as read):\n'
-  printf '  findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS   (discovery; read-only)\n'
-  printf "  findmnt -n -o OPTIONS '<target>'             (re-check; read-only)\n"
-  printf '  %s   (the only elevated step, after your yes)\n' \
+  printf "  findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS, then -o OPTIONS '<target>'  (read-only)\n"
+  printf '  %s   (the only elevated step; the menu confirmed this run)\n' \
     "$(elevate_command_line "mount -o remount,rw '<target>'")"
   printf '  undo: %s   (from the record)\n' \
     "$(elevate_command_line "mount -o remount,ro '<target>'")"
@@ -352,12 +352,8 @@ run() {
   fi
   printf 'A remount lasts until the device is unplugged or the machine reboots: mintbutler never writes /etc/fstab and never changes a permission.\n'
 
-  # The ONE question this module asks (manifest asks: 1); Enter or EOF means NO.
-  if ! ask_yn "Remount ${target} read-write now (recorded first; undo restores read-only)"; then
-    printf 'Nothing changed.\n'
-    exit 0
-  fi
-
+  # No in-module safety question (MODULE_SPEC §3): the menu took the single
+  # confirmation for this run before this module launched.
   # Record the target and its exact previous options BEFORE anything runs, so
   # undo can restore the pre-repair state even if the remount half-succeeds.
   mkdir -p "${STATE_DIR}"

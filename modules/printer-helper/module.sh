@@ -14,7 +14,9 @@ set -euo pipefail
 # default names a queue that no longer exists and a healthy one does, it
 # points the default at that queue with lpoptions -d. The previous default is
 # recorded BEFORE the change (prev_default=<queue> or prev_default=none) and
-# undo restores it exactly.
+# undo restores it exactly. This module asks no safety question: the menu
+# takes the single confirmation for a run before this module launches
+# (MODULE_SPEC §3, MB-004).
 #
 # Diagnosis ladder (run order):
 #   1. preflight: lpstat, lpinfo, lpoptions exist (cups-client ships on Mint)
@@ -22,15 +24,9 @@ set -euo pipefail
 #   3. lpstat -p -d  — queues and the current default
 #   4. no queue      -> guided-setup verdict, exit 0
 #   5. lpinfo -v     — device scan (best effort; failure tolerated)
-#   6. default repair — current vs proposed, ONE confirmation, record, apply,
-#                       verify (verify mismatch -> record deleted, exit 1)
+#   6. default repair — current vs proposed, record, apply, verify
+#                       (verify mismatch -> record deleted, exit 1)
 #   7. otherwise     -> honest status verdict, exit 0
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-LIB_DIR="${MINTBUTLER_LIB_DIR:-$(cd "${SCRIPT_DIR}/../../lib" && pwd)}"
-
-# shellcheck source=lib/ask.sh
-source "${LIB_DIR}/ask.sh"
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mintbutler/printer-helper"
 STATE_FILE="${STATE_DIR}/default.record"
@@ -210,8 +206,8 @@ plan() {
   printf '   mintbutler never downloads or installs vendor drivers or blobs.\n'
   printf '5. Device scan with: lpinfo -v (best effort; a failure is reported, not fatal)\n'
   printf '6. Default repair, only when no default is set and a queue is idle, or the default names\n'
-  printf '   a missing queue and a healthy one exists: show current versus proposed, ask ONE\n'
-  printf '   confirmation, record the previous default, apply lpoptions -d <queue>, verify with lpstat -d.\n'
+  printf '   a missing queue and a healthy one exists: show current versus proposed, then (the menu\n'
+  printf '   took the one confirmation) record the previous default, apply lpoptions -d <queue>, verify with lpstat -d.\n'
   printf '7. Otherwise: honest status verdict naming every queue and its state; a disabled or paused\n'
   printf '   queue is re-enabled in Mint'"'"'s Printers settings, never here. Undo restores the recorded default.\n'
 }
@@ -223,7 +219,7 @@ dry_run() {
   printf '  lpstat -r                  (scheduler state)\n'
   printf '  lpstat -p -d               (queues and the current default)\n'
   printf '  lpinfo -v                  (device scan; best effort)\n'
-  printf '  lpoptions -d <queue>       (only after your confirmation)\n'
+  printf '  lpoptions -d <queue>       (only after the menu confirmation)\n'
   printf '  lpstat -d                  (verify the new default)\n'
   printf '  undo: lpoptions -d <recorded default> | lpoptions -x   (record says none)\n'
   printf '  state: %s is written before the change and removed by undo\n' "${STATE_FILE}"
@@ -330,12 +326,8 @@ run() {
     printf '  proposed: %s (%s)\n' "${proposed}" "${QUEUE_STATES[proposed_idx]}"
     printf '  command:  lpoptions -d %s\n' "${proposed}"
 
-    # The ONE question this module ever asks. Enter (and EOF) mean NO.
-    if ! ask_yn "Point the default printer at ${proposed} (the previous default is recorded first; undo restores it)"; then
-      printf 'Nothing changed.\n'
-      exit 0
-    fi
-
+    # No in-module safety question (MODULE_SPEC §3): the menu took the single
+    # confirmation for this run before this module launched.
     # Record the previous default BEFORE applying anything.
     mkdir -p "${STATE_DIR}"
     if [[ "${DEFAULT_PRESENT}" -eq 1 && -n "${DEFAULT_QUEUE}" ]]; then

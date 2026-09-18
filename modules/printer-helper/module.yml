@@ -8,5 +8,5 @@ description: >-
 risk: low
 undo: true
 needs: [lpstat, lpinfo, lpoptions]
-asks: 1
+asks: 0
 order: 60

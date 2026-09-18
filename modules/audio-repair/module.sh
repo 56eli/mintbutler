@@ -15,8 +15,9 @@ set -euo pipefail
 #   4. no real sink → dmesg        — kernel-log evidence scan (the ONLY
 #      elevated step; read-only; runs through lib/elevate.sh)
 #   5. real sink → amixer          — first Master control: muted? volume 0%?
-#   6. muted/0% → show current vs proposed, ONE confirmation, record the
-#      state, apply, verify.
+#   6. muted/0% → show current vs proposed, then record the state, apply,
+#      verify. This module asks no safety question: the menu takes the single
+#      confirmation for a run before this module launches (MODULE_SPEC §3).
 #
 # Kernel-log evidence rule (kept simple on purpose): a log line counts as
 # driver/firmware evidence when, lowercased, it contains an audio signature
@@ -31,8 +32,6 @@ export MINTBUTLER_MODULE_SLUG="${MINTBUTLER_MODULE_SLUG:-audio-repair}"
 
 # shellcheck source=lib/elevate.sh
 source "${LIB_DIR}/elevate.sh"
-# shellcheck source=lib/ask.sh
-source "${LIB_DIR}/ask.sh"
 
 # The only elevated command this module ever runs (fixed, reviewed,
 # read-only). The privileged prefix lives only in lib/elevate.sh.
@@ -56,8 +55,8 @@ plan() {
   printf '   Evidence found -> newer-kernel/firmware verdict; nothing is changed.\n'
   printf '5. A device is present -> read the Master mixer control with: amixer\n'
   printf '   Healthy chain -> honest verdict, nothing is changed.\n'
-  printf '   Muted or 0%% -> show current vs proposed, ask ONE confirmation; on\n'
-  printf '   yes only: record the Master state, apply the repair, verify.\n'
+  printf '   Muted or 0%% -> show current vs proposed, then — the menu took the one\n'
+  printf '   confirmation before launch — record the Master state, apply, verify.\n'
   printf '6. Undo re-applies the recorded mute flag and volume exactly, then\n'
   printf '   deletes the state record. Every other step is read-only.\n'
 }
@@ -292,7 +291,8 @@ run() {
     exit 0
   fi
 
-  # (vi) repair offer: current vs proposed, ONE confirmation (Enter = NO).
+  # (vi) repair: current vs proposed, then apply (no in-module question — the
+  # menu took the single confirmation for this run; MODULE_SPEC §3, MB-004).
   local target_volume="${rec_volume}"
   local proposed_note="your volume is preserved"
   if [[ "${rec_volume}" -eq 0 ]]; then
@@ -303,11 +303,9 @@ run() {
   printf '  current:  %s, %s%%\n' "${state_word}" "${rec_volume}"
   printf '  proposed: unmuted, %s%% (%s)\n' "${target_volume}" "${proposed_note}"
   printf '  command:  amixer -q sset Master %s%% unmute\n' "${target_volume}"
-  if ! ask_yn "Apply this mixer repair now (state recorded first; undo restores it)"; then
-    printf 'Nothing changed.\n'
-    exit 0
-  fi
 
+  # No in-module safety question (MODULE_SPEC §3): the menu took the single
+  # confirmation for this run before this module launched.
   # Record the exact prior state BEFORE applying anything.
   mkdir -p "${STATE_DIR}"
   {
