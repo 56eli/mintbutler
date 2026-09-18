@@ -64,6 +64,18 @@ join_comma() {
   printf '%s' "${out}"
 }
 
+# contains_item NEEDLE HAYSTACK... — true when NEEDLE is one of the items.
+contains_item() {
+  local needle="${1:-}" item
+  shift
+  for item in "$@"; do
+    if [[ "${item}" == "${needle}" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
 describe() {
   printf 'Diagnose-first codec installer: reports which curated codec packages are missing and, after ONE confirmation, installs exactly those — installs are not undone; the manual removal command is printed instead.\n'
 }
@@ -152,7 +164,53 @@ run() {
     exit 0
   fi
 
-  printf 'Install step is not implemented yet (work in progress).\n' >&2
+  # (v) the ONE elevated step: install exactly the missing curated packages.
+  local install_code=0
+  elevate_run "${install_command}" || install_code="$?"
+  if [[ "${install_code}" -ne 0 ]]; then
+    printf 'The elevated apt-get step failed (exit %d); no result is claimed.\n' "${install_code}" >&2
+    exit 1
+  fi
+
+  # (vi) verification: re-check every package that was missing.
+  local -a now_installed=() still_missing=()
+  for pkg in "${missing[@]}"; do
+    if dpkg -s "${pkg}" >/dev/null 2>&1; then
+      now_installed+=("${pkg}")
+    else
+      still_missing+=("${pkg}")
+    fi
+  done
+
+  if [[ "${#still_missing[@]}" -eq 0 ]]; then
+    printf 'Verified — per-package result:\n'
+    for pkg in "${now_installed[@]}"; do
+      printf '  %s — installed\n' "${pkg}"
+    done
+    local remove_command="apt-get remove ${now_installed[*]}"
+    printf 'Manual removal (never run by this module): %s\n' "$(elevate_command_line "${remove_command}")"
+    printf 'Reminder: package installs are not undone by mintbutler — the removal command above is the honest way back.\n'
+    exit 0
+  fi
+
+  # Honest mixed report: per-package lists, plain hint, the removal command
+  # for what DID install, exit 1 with one plain stderr line.
+  printf 'Mixed result — per-package status:\n'
+  for pkg in "${missing[@]}"; do
+    if contains_item "${pkg}" "${now_installed[@]}"; then
+      printf '  %s — installed\n' "${pkg}"
+    else
+      printf '  %s — still missing (the install did not take)\n' "${pkg}"
+    fi
+  done
+  printf 'Hint: no apt-get update runs — the install used the cached package lists.\n'
+  printf 'Refresh the software sources (Update Manager), check the network, then re-run this module.\n'
+  if [[ "${#now_installed[@]}" -gt 0 ]]; then
+    local remove_command="apt-get remove ${now_installed[*]}"
+    printf 'Manual removal for what did install (never run by this module): %s\n' "$(elevate_command_line "${remove_command}")"
+    printf 'Reminder: package installs are not undone by mintbutler.\n'
+  fi
+  printf 'Some curated codec packages are still missing after the elevated install.\n' >&2
   exit 1
 }
 
