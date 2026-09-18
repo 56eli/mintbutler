@@ -3946,9 +3946,8 @@ else
   fail "bin/modulelint reports PASS printer-helper"
 fi
 
-output_bd_lint=""
 code_bd_lint="0"
-output_bd_lint="$(cd "${REPO_ROOT}" && bin/modulelint 2>&1)" || code_bd_lint="$?"
+(cd "${REPO_ROOT}" && bin/modulelint >/dev/null 2>&1) || code_bd_lint="$?"
 if [[ "${code_bd_lint}" -ne 0 ]]; then
   fail "bin/modulelint exits 0 over all modules with printer-helper present (got ${code_bd_lint})"
 else
@@ -4002,7 +4001,7 @@ cp -a "${PH_BD_HOME}" "${PH_BD_HOME_BEFORE}"
 
 output_bd_plan=""
 code_bd_plan="0"
-output_bd_plan="$(HOME="${PH_BD_HOME}" XDG_STATE_HOME= bash "${PH_MODULE}" plan < /dev/null 2>&1)" || code_bd_plan="$?"
+output_bd_plan="$(HOME="${PH_BD_HOME}" XDG_STATE_HOME="" bash "${PH_MODULE}" plan < /dev/null 2>&1)" || code_bd_plan="$?"
 ph_bd_plan_lines="$(printf '%s\n' "${output_bd_plan}" | grep -c . || true)"
 if [[ "${code_bd_plan}" -eq 0 && -n "${output_bd_plan}" ]]; then
   pass "printer-helper plan exits 0 and non-empty"
@@ -4017,7 +4016,7 @@ fi
 
 output_bd_dry=""
 code_bd_dry="0"
-output_bd_dry="$(HOME="${PH_BD_HOME}" XDG_STATE_HOME= bash "${PH_MODULE}" dry-run < /dev/null 2>&1)" || code_bd_dry="$?"
+output_bd_dry="$(HOME="${PH_BD_HOME}" XDG_STATE_HOME="" bash "${PH_MODULE}" dry-run < /dev/null 2>&1)" || code_bd_dry="$?"
 ph_bd_dry_lines="$(printf '%s\n' "${output_bd_dry}" | grep -c . || true)"
 if [[ "${code_bd_dry}" -eq 0 && -n "${output_bd_dry}" ]]; then
   pass "printer-helper dry-run exits 0 and non-empty"
@@ -4048,7 +4047,7 @@ fi
 # Menu-flag smoke (owner acceptance command): --run <slug> --dry-run is
 # non-destructive.
 code_bd_menudry="0"
-HOME="${PH_BD_HOME}" XDG_STATE_HOME= bash -c 'cd "'"${REPO_ROOT}"'" && ./butler --run printer-helper --dry-run' >/dev/null 2>&1 || code_bd_menudry="$?"
+HOME="${PH_BD_HOME}" XDG_STATE_HOME="" bash -c 'cd "'"${REPO_ROOT}"'" && ./butler --run printer-helper --dry-run' >/dev/null 2>&1 || code_bd_menudry="$?"
 if [[ "${code_bd_menudry}" -eq 0 ]]; then
   pass "butler --run printer-helper --dry-run exits 0"
 else
@@ -4068,7 +4067,7 @@ PH_BD2_STDERR="${TMPBASE}/ph-bd2.stderr"
 mkdir -p "${PH_BD2_HOME}"
 cp -a "${PH_BD2_HOME}" "${PH_BD2_HOME_BEFORE}"
 code_bd_run="0"
-PATH="${PH_BIN_EMPTY}" HOME="${PH_BD2_HOME}" XDG_STATE_HOME= \
+PATH="${PH_BIN_EMPTY}" HOME="${PH_BD2_HOME}" XDG_STATE_HOME="" \
   bash "${PH_MODULE}" run < /dev/null >/dev/null 2>"${PH_BD2_STDERR}" || code_bd_run="$?"
 if [[ "${code_bd_run}" -eq 1 ]]; then
   pass "printer-helper missing-tools preflight exits 1 (got ${code_bd_run})"
@@ -4094,7 +4093,8 @@ if grep -w -E -q 'sudo|pkexec' "${PH_MODULE}"; then
 else
   pass "printer-helper source contains no sudo/pkexec literal"
 fi
-if grep -F -q 'source "${LIB_DIR}/elevate.sh"' "${PH_MODULE}"; then
+ph_elevate_source="source \"\${LIB_DIR}/elevate.sh\""
+if grep -F -q "${ph_elevate_source}" "${PH_MODULE}"; then
   fail "printer-helper never sources lib/elevate.sh"
 else
   pass "printer-helper never sources lib/elevate.sh"
@@ -4112,7 +4112,7 @@ printf 'default=OfficeJet-5200\n' > "${PH_BE_STATE}"
 BE_OPT="${TMPBASE}/ph-be-lpoptions.log"
 output_be=""
 code_be="0"
-output_be="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BE_HOME}" XDG_STATE_HOME= \
+output_be="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BE_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BE_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BE_OPT}" \
   bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_be="$?"
@@ -4164,7 +4164,7 @@ cp -a "${PH_BF_HOME}" "${PH_BF_HOME_BEFORE}"
 printf 'default=none\n' > "${PH_BF_STATE}"
 output_bf=""
 code_bf="0"
-output_bf="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BF_HOME}" XDG_STATE_HOME= \
+output_bf="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BF_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BF_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPSTAT_STUB_SCHED=down LPOPTIONS_STUB_LOG="${TMPBASE}/ph-bf-lpoptions.log" \
   bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_bf="$?"
@@ -4196,7 +4196,7 @@ else
 fi
 output_bf2=""
 code_bf2="0"
-output_bf2="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BF_HOME}" XDG_STATE_HOME= \
+output_bf2="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BF_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BF_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPSTAT_STUB_SCHED=fail \
   bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_bf2="$?"
@@ -4217,8 +4217,8 @@ cp -a "${PH_BG_HOME}" "${PH_BG_HOME_BEFORE}"
 printf 'default=none\n' > "${PH_BG_STATE}"
 output_bg=""
 code_bg="0"
-output_bg="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BG_HOME}" XDG_STATE_HOME= \
-  LPSTAT_STUB_STATE="${PH_BG_STATE}" LPSTAT_STUB_QUEUES= \
+output_bg="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BG_HOME}" XDG_STATE_HOME="" \
+  LPSTAT_STUB_STATE="${PH_BG_STATE}" LPSTAT_STUB_QUEUES="" \
   LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${TMPBASE}/ph-bg-lpoptions.log" \
   bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_bg="$?"
 if [[ "${code_bg}" -eq 0 ]]; then
@@ -4267,7 +4267,7 @@ printf 'default=none\n' > "${PH_BH_STATE}"
 BH_OPT="${TMPBASE}/ph-bh-lpoptions.log"
 output_bh=""
 code_bh="0"
-output_bh="$(printf 'y\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME= \
+output_bh="$(printf 'y\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BH_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BH_OPT}" \
   bash "${PH_MODULE}" run 2>&1)" || code_bh="$?"
@@ -4307,7 +4307,7 @@ fi
 
 output_bhu=""
 code_bhu="0"
-output_bhu="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME= \
+output_bhu="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BH_STATE}" LPOPTIONS_STUB_LOG="${BH_OPT}" \
   bash "${PH_MODULE}" undo < /dev/null 2>&1)" || code_bhu="$?"
 if [[ "${code_bhu}" -eq 0 ]]; then
@@ -4338,7 +4338,7 @@ else
 fi
 output_bhu2=""
 code_bhu2="0"
-output_bhu2="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME= \
+output_bhu2="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BH_STATE}" \
   bash "${PH_MODULE}" undo < /dev/null 2>&1)" || code_bhu2="$?"
 if [[ "${code_bhu2}" -eq 0 ]] && printf '%s\n' "${output_bhu2}" | grep -q "Nothing to undo."; then
@@ -4354,7 +4354,7 @@ PH_BH2_STDERR="${TMPBASE}/ph-bh2.stderr"
 mkdir -p "${PH_BH2_HOME}/.local/state/mintbutler/printer-helper"
 printf 'prev_default=none\n' > "${PH_BH2_HOME}/${PH_STATE_REL}"
 code_bh2="0"
-PATH="${PH_BIN_EMPTY}" HOME="${PH_BH2_HOME}" XDG_STATE_HOME= \
+PATH="${PH_BIN_EMPTY}" HOME="${PH_BH2_HOME}" XDG_STATE_HOME="" \
   bash "${PH_MODULE}" undo < /dev/null >/dev/null 2>"${PH_BH2_STDERR}" || code_bh2="$?"
 bh2_stderr_lines="$(grep -c . "${PH_BH2_STDERR}" || true)"
 if [[ "${code_bh2}" -eq 1 && "${bh2_stderr_lines}" -eq 1 ]] \
@@ -4381,7 +4381,7 @@ printf 'default=none\n' > "${PH_BI_STATE}"
 BI_OPT="${TMPBASE}/ph-bi-lpoptions.log"
 output_bi=""
 code_bi="0"
-output_bi="$(printf 'n\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BI_HOME}" XDG_STATE_HOME= \
+output_bi="$(printf 'n\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BI_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BI_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BI_OPT}" \
   bash "${PH_MODULE}" run 2>&1)" || code_bi="$?"
@@ -4418,7 +4418,7 @@ PH_BI2_STDOUT="${TMPBASE}/ph-bi2.stdout"
 mkdir -p "${PH_BI2_HOME}"
 printf 'default=none\n' > "${PH_BI2_STATE}"
 code_bi2="0"
-printf 'y\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BI2_HOME}" XDG_STATE_HOME= \
+printf 'y\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BI2_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BI2_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${TMPBASE}/ph-bi2-lpoptions.log" \
   LPOPTIONS_STUB_FAIL=1 \
