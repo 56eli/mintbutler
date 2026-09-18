@@ -4453,6 +4453,544 @@ else
 fi
 
 
+# ---------------------------------------------------------------------------
+# Stages (bj)-(bl): system-report-pack (user-level, strictly read-only,
+# never installs) — stub-only verification. Every stage runs the module
+# with a controlled PATH (stub uname/uptime/free/df/lscpu plus symlinks to
+# the coreutils the module needs) and a fake HOME under mktemp. No stage
+# ever invokes a real report tool against the host in a way the harness
+# depends on, and no stub ever writes anything but its own call log. The
+# canned /etc/os-release is handled via the module's documented seam: the
+# MINTBUTLER_OS_RELEASE_FILE environment override (default /etc/os-release)
+# is pointed at a canned file; the real system file is never touched.
+# ---------------------------------------------------------------------------
+
+SR_MODULE="${REPO_ROOT}/modules/system-report-pack/module.sh"
+SR_STUB_ROOT="${TMPBASE}/sr-stubs"
+SR_OS_RELEASE="${TMPBASE}/sr-os-release"
+mkdir -p "${SR_STUB_ROOT}"
+
+# Canned os-release file for the module's MINTBUTLER_OS_RELEASE_FILE seam.
+cat <<'SR_OS_RELEASE_EOF' > "${SR_OS_RELEASE}"
+NAME="Linux Mint"
+VERSION="22 (Wilma)"
+ID=mint
+ID_LIKE=ubuntu
+PRETTY_NAME="Linux Mint 22"
+VERSION_ID="22"
+SR_OS_RELEASE_EOF
+
+# Controlled-PATH builder: symlink the coreutils the module and its stub
+# scripts need from the host; each stage's bin dir then gets only the
+# stubs that stage wants present.
+sr_make_bin() {
+  local dir="${1:-}"
+  mkdir -p "${dir}"
+  local tool tool_path
+  for tool in dirname sed mkdir rm rmdir mv bash; do
+    tool_path="$(command -v "${tool}" || true)"
+    if [[ -n "${tool_path}" ]]; then
+      ln -sf "${tool_path}" "${dir}/${tool}"
+    fi
+  done
+  printf '%s\n' "${dir}"
+}
+
+# Stub uname: canned -n / -r / -m replies; logs every invocation to
+# SR_STUB_LOG (when set).
+cat <<'SR_UNAME_STUB' > "${SR_STUB_ROOT}/uname"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${SR_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'uname%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+case "${1:-}" in
+  -n) printf 'mintbutler-lab\n' ;;
+  -r) printf '6.8.0-48-generic\n' ;;
+  -m) printf 'x86_64\n' ;;
+  *)
+    printf 'uname-stub: unsupported invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+SR_UNAME_STUB
+
+# Stub uptime: canned -p reply and the plain load line;
+# SR_UPTIME_STUB_FAIL=1 makes every invocation fail.
+cat <<'SR_UPTIME_STUB' > "${SR_STUB_ROOT}/uptime"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${SR_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'uptime%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+if [[ "${SR_UPTIME_STUB_FAIL:-0}" == "1" ]]; then
+  printf 'uptime-stub: refused\n' >&2
+  exit 1
+fi
+case "${1:-}" in
+  -p) printf 'up 2 days, 3 hours, 41 minutes\n' ;;
+  '') printf ' 14:32:01 up 2 days, 3:41, 2 users, load average: 0.52, 0.48, 0.45\n' ;;
+  *)
+    printf 'uptime-stub: unsupported invocation: %s\n' "$*" >&2
+    exit 2
+    ;;
+esac
+SR_UPTIME_STUB
+
+# Stub free: canned `free -h` block; SR_FREE_STUB_FAIL=1 makes it fail.
+cat <<'SR_FREE_STUB' > "${SR_STUB_ROOT}/free"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${SR_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'free%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+if [[ "${1:-}" != "-h" ]]; then
+  printf 'free-stub: unsupported invocation: %s\n' "$*" >&2
+  exit 2
+fi
+if [[ "${SR_FREE_STUB_FAIL:-0}" == "1" ]]; then
+  printf 'free-stub: refused\n' >&2
+  exit 1
+fi
+printf '               total        used        free      shared  buff/cache   available\n'
+printf 'Mem:           15Gi       6.2Gi       3.1Gi       120Mi       5.6Gi       9.4Gi\n'
+printf 'Swap:         8.0Gi       1.2Gi       6.8Gi\n'
+SR_FREE_STUB
+
+# Stub df: canned `df -h /` block; SR_DF_STUB_FAIL=1 makes it fail.
+cat <<'SR_DF_STUB' > "${SR_STUB_ROOT}/df"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${SR_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'df%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+if [[ "${SR_DF_STUB_FAIL:-0}" == "1" ]]; then
+  printf 'df-stub: refused\n' >&2
+  exit 1
+fi
+if [[ "$#" -eq 2 && "${1:-}" == "-h" && "${2:-}" == "/" ]]; then
+  printf 'Filesystem      Size  Used Avail Use%% Mounted on\n'
+  printf '/dev/nvme0n1p2  916G  234G  633G  32%% /\n'
+  exit 0
+fi
+printf 'df-stub: unsupported invocation: %s\n' "$*" >&2
+exit 2
+SR_DF_STUB
+
+# Stub lscpu: canned output with a Model name line and a CPU(s) line.
+cat <<'SR_LSCPU_STUB' > "${SR_STUB_ROOT}/lscpu"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${SR_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'lscpu%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+printf 'Architecture:                    x86_64\n'
+printf 'CPU(s):                          14\n'
+printf 'Thread(s) per core:              2\n'
+printf 'Core(s) per socket:              8\n'
+printf 'Socket(s):                       1\n'
+printf 'Model name:                      13th Gen Intel(R) Core(TM) i7-1360P\n'
+SR_LSCPU_STUB
+
+chmod +x "${SR_STUB_ROOT}/uname" "${SR_STUB_ROOT}/uptime" "${SR_STUB_ROOT}/free" \
+  "${SR_STUB_ROOT}/df" "${SR_STUB_ROOT}/lscpu"
+
+# Bin dir with only coreutils: no report tool at all — the preflight path
+# every lint sandbox takes when the tools are absent.
+SR_BIN_EMPTY="${SR_STUB_ROOT}/bin-empty"
+sr_make_bin "${SR_BIN_EMPTY}" >/dev/null
+
+# Bin dir with every report tool stubbed, including the optional lscpu.
+SR_BIN_FULL="${SR_STUB_ROOT}/bin-full"
+sr_make_bin "${SR_BIN_FULL}" >/dev/null
+cp "${SR_STUB_ROOT}/uname" "${SR_STUB_ROOT}/uptime" "${SR_STUB_ROOT}/free" \
+  "${SR_STUB_ROOT}/df" "${SR_STUB_ROOT}/lscpu" "${SR_BIN_FULL}/"
+
+# Bin dir for the degradation stage: lscpu ABSENT; free is present but the
+# stage exports SR_FREE_STUB_FAIL=1 so it fails.
+SR_BIN_DEGRADED="${SR_STUB_ROOT}/bin-degraded"
+sr_make_bin "${SR_BIN_DEGRADED}" >/dev/null
+cp "${SR_STUB_ROOT}/uname" "${SR_STUB_ROOT}/uptime" "${SR_STUB_ROOT}/free" \
+  "${SR_STUB_ROOT}/df" "${SR_BIN_DEGRADED}/"
+
+# Stage (bj): gate + read-only smokes.
+printf 'Stage bj: system-report-pack gate, scan, list, plan/dry-run, missing preflight\n'
+
+output_bj_scan=""
+code_bj_scan="0"
+output_bj_scan="$(cd "${REPO_ROOT}" && ./butler --scan 2>&1)" || code_bj_scan="$?"
+if [[ "${code_bj_scan}" -ne 0 ]]; then
+  fail "butler --scan exits 0 with system-report-pack present (got ${code_bj_scan})"
+else
+  pass "butler --scan exits 0 with system-report-pack present"
+fi
+if printf '%s\n' "${output_bj_scan}" | grep -q "PASS system-report-pack"; then
+  pass "butler --scan reports PASS system-report-pack"
+else
+  fail "butler --scan reports PASS system-report-pack"
+fi
+
+output_bj_lint1=""
+code_bj_lint1="0"
+output_bj_lint1="$(cd "${REPO_ROOT}" && bin/modulelint system-report-pack 2>&1)" || code_bj_lint1="$?"
+if [[ "${code_bj_lint1}" -ne 0 ]]; then
+  fail "bin/modulelint system-report-pack exits 0 (got ${code_bj_lint1})"
+else
+  pass "bin/modulelint system-report-pack exits 0"
+fi
+if printf '%s\n' "${output_bj_lint1}" | grep -q "PASS system-report-pack"; then
+  pass "bin/modulelint system-report-pack contains PASS system-report-pack"
+else
+  fail "bin/modulelint system-report-pack contains PASS system-report-pack"
+fi
+
+code_bj_lint="0"
+(cd "${REPO_ROOT}" && bin/modulelint >/dev/null 2>&1) || code_bj_lint="$?"
+if [[ "${code_bj_lint}" -ne 0 ]]; then
+  fail "bin/modulelint exits 0 over all modules with system-report-pack present (got ${code_bj_lint})"
+else
+  pass "bin/modulelint exits 0 over all modules with system-report-pack present"
+fi
+
+output_bj_list=""
+code_bj_list="0"
+output_bj_list="$(cd "${REPO_ROOT}" && ./butler --list 2>&1)" || code_bj_list="$?"
+if [[ "${code_bj_list}" -ne 0 ]]; then
+  fail "butler --list exits 0 (got ${code_bj_list})"
+else
+  pass "butler --list exits 0"
+fi
+sr_bj_list_line="$(printf '%s\n' "${output_bj_list}" | grep -- "system-report-pack: System report pack" || true)"
+if [[ -n "${sr_bj_list_line}" ]]; then
+  pass "butler --list shows system-report-pack: System report pack"
+else
+  fail "butler --list shows system-report-pack: System report pack"
+fi
+if [[ "${sr_bj_list_line}" == *"⚠ elevated"* ]]; then
+  fail "butler --list shows NO elevated badge on system-report-pack"
+else
+  pass "butler --list shows NO elevated badge on system-report-pack"
+fi
+if printf '%s\n' "${output_bj_list}" | grep -q "printer-helper" \
+  && printf '%s\n' "${output_bj_list}" | grep -q "timeshift-guardian" \
+  && printf '%s\n' "${output_bj_list}" | grep -q "desktop-shortcut-creator"; then
+  pass "butler --list still shows the earlier modules"
+else
+  fail "butler --list still shows the earlier modules"
+fi
+
+# Menu position smoke: with the current module set, order 70 renders as
+# entry 7 on page 1 (positions are recomputed at scan time), and a
+# user-level module carries no elevated badge.
+output_bj_menu=""
+code_bj_menu="0"
+output_bj_menu="$(printf 'q\n' | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || code_bj_menu="$?"
+sr_bj_menu_line="$(printf '%s\n' "${output_bj_menu}" | grep -F "7) System report pack" || true)"
+if [[ "${code_bj_menu}" -eq 0 && -n "${sr_bj_menu_line}" && "${sr_bj_menu_line}" != *"⚠ elevated"* ]]; then
+  pass "menu renders System report pack at its order-70 position without an elevated badge"
+else
+  fail "menu renders System report pack at its order-70 position without an elevated badge (got ${code_bj_menu}: ${sr_bj_menu_line})"
+fi
+
+# Menu navigation, no undo affordance: the detail screen of an undo: false
+# module offers [d]ry-run/[r]un/[b]ack and never [u]ndo. Scripted stdin:
+# /system filters to the module, 1 opens its detail screen, b goes back,
+# q quits.
+output_bj_nav=""
+code_bj_nav="0"
+output_bj_nav="$(printf '/system\n1\nb\nq\n' | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || code_bj_nav="$?"
+if [[ "${code_bj_nav}" -ne 0 ]]; then
+  fail "menu navigation through the system-report-pack detail screen exits 0 (got ${code_bj_nav})"
+else
+  pass "menu navigation through the system-report-pack detail screen exits 0"
+fi
+if printf '%s\n' "${output_bj_nav}" | grep -Fq "[d]ry-run  [r]un  [b]ack"; then
+  pass "detail screen offers dry-run/run/back"
+else
+  fail "detail screen offers dry-run/run/back"
+fi
+if printf '%s\n' "${output_bj_nav}" | grep -Fq "[u]ndo"; then
+  fail "detail screen shows NO [u]ndo affordance (undo: false)"
+else
+  pass "detail screen shows NO [u]ndo affordance (undo: false)"
+fi
+if printf '%s\n' "${output_bj_nav}" | grep -q "Undo: not available"; then
+  pass "detail screen states undo is not available"
+else
+  fail "detail screen states undo is not available"
+fi
+
+SR_BJ_HOME="${TMPBASE}/sr-home-bj"
+SR_BJ_HOME_BEFORE="${TMPBASE}/sr-home-bj-before"
+mkdir -p "${SR_BJ_HOME}"
+cp -a "${SR_BJ_HOME}" "${SR_BJ_HOME_BEFORE}"
+
+output_bj_plan=""
+code_bj_plan="0"
+output_bj_plan="$(HOME="${SR_BJ_HOME}" bash "${SR_MODULE}" plan < /dev/null 2>&1)" || code_bj_plan="$?"
+sr_bj_plan_lines="$(printf '%s\n' "${output_bj_plan}" | grep -c . || true)"
+if [[ "${code_bj_plan}" -eq 0 && -n "${output_bj_plan}" ]]; then
+  pass "system-report-pack plan exits 0 and non-empty"
+else
+  fail "system-report-pack plan exits 0 and non-empty (got ${code_bj_plan})"
+fi
+if [[ "${sr_bj_plan_lines}" -le 23 ]]; then
+  pass "system-report-pack plan renders in <= 23 lines (got ${sr_bj_plan_lines})"
+else
+  fail "system-report-pack plan renders in <= 23 lines (got ${sr_bj_plan_lines})"
+fi
+if printf '%s\n' "${output_bj_plan}" | grep -qiF "never inxi" \
+  && printf '%s\n' "${output_bj_plan}" | grep -qiF "writes nothing"; then
+  pass "system-report-pack plan contains the never-inxi and writes-nothing statements"
+else
+  fail "system-report-pack plan contains the never-inxi and writes-nothing statements"
+fi
+
+output_bj_dry=""
+code_bj_dry="0"
+output_bj_dry="$(HOME="${SR_BJ_HOME}" bash "${SR_MODULE}" dry-run < /dev/null 2>&1)" || code_bj_dry="$?"
+sr_bj_dry_lines="$(printf '%s\n' "${output_bj_dry}" | grep -c . || true)"
+if [[ "${code_bj_dry}" -eq 0 && -n "${output_bj_dry}" ]]; then
+  pass "system-report-pack dry-run exits 0 and non-empty"
+else
+  fail "system-report-pack dry-run exits 0 and non-empty (got ${code_bj_dry})"
+fi
+if [[ "${sr_bj_dry_lines}" -le 23 ]]; then
+  pass "system-report-pack dry-run renders in <= 23 lines (got ${sr_bj_dry_lines})"
+else
+  fail "system-report-pack dry-run renders in <= 23 lines (got ${sr_bj_dry_lines})"
+fi
+if diff -r "${SR_BJ_HOME}" "${SR_BJ_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "system-report-pack plan and dry-run write nothing to the fake HOME"
+else
+  fail "system-report-pack plan and dry-run modified the fake HOME"
+fi
+
+# Menu-flag smoke (owner acceptance command): --run <slug> --dry-run is
+# non-destructive.
+code_bj_menudry="0"
+HOME="${SR_BJ_HOME}" bash -c 'cd "'"${REPO_ROOT}"'" && ./butler --run system-report-pack --dry-run' >/dev/null 2>&1 || code_bj_menudry="$?"
+if [[ "${code_bj_menudry}" -eq 0 ]]; then
+  pass "butler --run system-report-pack --dry-run exits 0"
+else
+  fail "butler --run system-report-pack --dry-run exits 0 (got ${code_bj_menudry})"
+fi
+if diff -r "${SR_BJ_HOME}" "${SR_BJ_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "butler --run system-report-pack --dry-run leaves the fake HOME untouched"
+else
+  fail "butler --run system-report-pack --dry-run modified the fake HOME"
+fi
+
+# Missing-tools preflight (modulelint compatibility): stdin /dev/null and
+# no report tool on PATH -> exit 1, one plain stderr line, empty stdout,
+# fake HOME byte-identical.
+SR_BJ2_HOME="${TMPBASE}/sr-home-bj2"
+SR_BJ2_HOME_BEFORE="${TMPBASE}/sr-home-bj2-before"
+SR_BJ2_STDOUT="${TMPBASE}/sr-bj2.stdout"
+SR_BJ2_STDERR="${TMPBASE}/sr-bj2.stderr"
+mkdir -p "${SR_BJ2_HOME}"
+cp -a "${SR_BJ2_HOME}" "${SR_BJ2_HOME_BEFORE}"
+code_bj_run="0"
+PATH="${SR_BIN_EMPTY}" HOME="${SR_BJ2_HOME}" \
+  bash "${SR_MODULE}" run < /dev/null >"${SR_BJ2_STDOUT}" 2>"${SR_BJ2_STDERR}" || code_bj_run="$?"
+if [[ "${code_bj_run}" -eq 1 ]]; then
+  pass "system-report-pack missing-tools preflight exits 1 (got ${code_bj_run})"
+else
+  fail "system-report-pack missing-tools preflight exits 1 (got ${code_bj_run})"
+fi
+bj2_stderr_lines="$(grep -c . "${SR_BJ2_STDERR}" || true)"
+if [[ "${bj2_stderr_lines}" -eq 1 ]] && grep -q "Report tools missing" "${SR_BJ2_STDERR}"; then
+  pass "system-report-pack missing-tools preflight prints one plain stderr line"
+else
+  fail "system-report-pack missing-tools preflight prints one plain stderr line (got ${bj2_stderr_lines}: $(cat "${SR_BJ2_STDERR}"))"
+fi
+if [[ ! -s "${SR_BJ2_STDOUT}" ]]; then
+  pass "system-report-pack missing-tools preflight prints nothing to stdout"
+else
+  fail "system-report-pack missing-tools preflight printed to stdout: $(cat "${SR_BJ2_STDOUT}")"
+fi
+if diff -r "${SR_BJ2_HOME}" "${SR_BJ2_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "system-report-pack missing-tools preflight writes nothing to the fake HOME"
+else
+  fail "system-report-pack missing-tools preflight modified the fake HOME"
+fi
+
+# Zero-elevation, zero-install source assertions: no sudo/pkexec literal
+# anywhere (display strings included), no shared-helper sourcing at all,
+# and no package-manager invocation of any kind.
+if grep -w -E -q 'sudo|pkexec' "${SR_MODULE}"; then
+  fail "system-report-pack source contains no sudo/pkexec literal"
+else
+  pass "system-report-pack source contains no sudo/pkexec literal"
+fi
+if grep -F -q "lib/elevate.sh" "${SR_MODULE}" || grep -F -q "lib/ask.sh" "${SR_MODULE}"; then
+  fail "system-report-pack sources no shared helper (no elevation, no question helper)"
+else
+  pass "system-report-pack sources no shared helper (no elevation, no question helper)"
+fi
+if grep -w -E -q 'apt|apt-get|aptitude|dnf|pacman|apk|zypper' "${SR_MODULE}"; then
+  fail "system-report-pack source contains no package-manager invocation"
+else
+  pass "system-report-pack source contains no package-manager invocation"
+fi
+if grep -F -q 'dpkg -i' "${SR_MODULE}"; then
+  fail "system-report-pack source contains no dpkg -i invocation"
+else
+  pass "system-report-pack source contains no dpkg -i invocation"
+fi
+
+# Stage (bk): full report — every stub present (incl. lscpu), canned
+# os-release via the seam, session env set. Asserts the exact report:
+# all five section headers, every canned value, the 23-line law, a
+# byte-identical fake HOME, and a stub log holding EXACTLY the eight
+# documented read-only invocations (no stub reports any write-like call).
+printf 'Stage bk: system-report-pack full report\n'
+SR_BK_HOME="${TMPBASE}/sr-home-bk"
+SR_BK_HOME_BEFORE="${TMPBASE}/sr-home-bk-before"
+SR_BK_LOG="${TMPBASE}/sr-bk.stublog"
+SR_BK_STDOUT="${TMPBASE}/sr-bk.stdout"
+SR_BK_STDERR="${TMPBASE}/sr-bk.stderr"
+mkdir -p "${SR_BK_HOME}"
+cp -a "${SR_BK_HOME}" "${SR_BK_HOME_BEFORE}"
+rm -f "${SR_BK_LOG}"
+code_bk="0"
+PATH="${SR_BIN_FULL}" HOME="${SR_BK_HOME}" \
+  SR_STUB_LOG="${SR_BK_LOG}" MINTBUTLER_OS_RELEASE_FILE="${SR_OS_RELEASE}" \
+  XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=X-Cinnamon \
+  bash "${SR_MODULE}" run < /dev/null >"${SR_BK_STDOUT}" 2>"${SR_BK_STDERR}" || code_bk="$?"
+if [[ "${code_bk}" -eq 0 ]]; then
+  pass "system-report-pack full report exits 0"
+else
+  fail "system-report-pack full report exits 0 (got ${code_bk})"
+fi
+sr_bk_lines="$(wc -l < "${SR_BK_STDOUT}" || true)"
+if [[ "${sr_bk_lines}" -le 23 ]]; then
+  pass "system-report-pack full report fits the 23-line law (${sr_bk_lines} lines)"
+else
+  fail "system-report-pack full report fits the 23-line law (${sr_bk_lines} lines)"
+fi
+for sr_header in "System:" "CPU:" "Memory:" "Disk /:" "Session:"; do
+  if grep -Fq "${sr_header}" "${SR_BK_STDOUT}"; then
+    pass "system-report-pack full report carries the ${sr_header} section header"
+  else
+    fail "system-report-pack full report carries the ${sr_header} section header"
+  fi
+done
+if grep -Fxq "System:  mintbutler-lab | Linux Mint 22 | 6.8.0-48-generic | x86_64 | up 2 days, 3 hours, 41 minutes" "${SR_BK_STDOUT}"; then
+  pass "system-report-pack System line carries hostname, PRETTY_NAME, kernel, architecture, uptime"
+else
+  fail "system-report-pack System line carries hostname, PRETTY_NAME, kernel, architecture, uptime"
+fi
+if grep -Fxq "CPU:     13th Gen Intel(R) Core(TM) i7-1360P (14 CPU(s)) | load 0.52, 0.48, 0.45" "${SR_BK_STDOUT}"; then
+  pass "system-report-pack CPU line carries the CPU model, core count, and load"
+else
+  fail "system-report-pack CPU line carries the CPU model, core count, and load"
+fi
+if grep -Fxq "Memory:  total 15Gi | used 6.2Gi | available 9.4Gi" "${SR_BK_STDOUT}"; then
+  pass "system-report-pack Memory line carries the canned free -h Mem values"
+else
+  fail "system-report-pack Memory line carries the canned free -h Mem values"
+fi
+if grep -Fxq "Disk /:  size 916G | used 234G | avail 633G | use 32%" "${SR_BK_STDOUT}"; then
+  pass "system-report-pack Disk / line carries the canned df -h / values"
+else
+  fail "system-report-pack Disk / line carries the canned df -h / values"
+fi
+if grep -Fxq "Session: type x11 | desktop X-Cinnamon" "${SR_BK_STDOUT}"; then
+  pass "system-report-pack Session line carries the canned session values"
+else
+  fail "system-report-pack Session line carries the canned session values"
+fi
+if diff -r "${SR_BK_HOME}" "${SR_BK_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "system-report-pack full report writes nothing to the fake HOME (byte-identical)"
+else
+  fail "system-report-pack full report modified the fake HOME"
+fi
+# The stub log must hold EXACTLY the eight documented read-only
+# invocations — nothing more (no write-like invocation, nothing extra).
+printf '%s\n' "uname -n" "uname -m" "uname -r" "uptime" "uptime -p" "df -h /" "free -h" "lscpu" | sort > "${SR_BK_LOG}.expected"
+if [[ -f "${SR_BK_LOG}" ]] && sort "${SR_BK_LOG}" | cmp -s - "${SR_BK_LOG}.expected"; then
+  pass "system-report-pack stub log holds exactly the eight documented read-only invocations"
+else
+  fail "system-report-pack stub log holds exactly the eight documented read-only invocations (got: $(cat "${SR_BK_LOG}" 2>/dev/null))"
+fi
+
+# Stage (bl): honest degradation — same stubs but lscpu ABSENT and free
+# FAILING. Exit 0; the CPU section carries the unavailable marker (load
+# still renders from uptime), the Memory section is unavailable, and all
+# other sections still render with their canned values.
+printf 'Stage bl: system-report-pack honest degradation\n'
+SR_BL_HOME="${TMPBASE}/sr-home-bl"
+SR_BL_HOME_BEFORE="${TMPBASE}/sr-home-bl-before"
+SR_BL_LOG="${TMPBASE}/sr-bl.stublog"
+SR_BL_STDOUT="${TMPBASE}/sr-bl.stdout"
+SR_BL_STDERR="${TMPBASE}/sr-bl.stderr"
+mkdir -p "${SR_BL_HOME}"
+cp -a "${SR_BL_HOME}" "${SR_BL_HOME_BEFORE}"
+rm -f "${SR_BL_LOG}"
+code_bl="0"
+PATH="${SR_BIN_DEGRADED}" HOME="${SR_BL_HOME}" \
+  SR_STUB_LOG="${SR_BL_LOG}" SR_FREE_STUB_FAIL=1 \
+  MINTBUTLER_OS_RELEASE_FILE="${SR_OS_RELEASE}" \
+  XDG_SESSION_TYPE=x11 XDG_CURRENT_DESKTOP=X-Cinnamon \
+  bash "${SR_MODULE}" run < /dev/null >"${SR_BL_STDOUT}" 2>"${SR_BL_STDERR}" || code_bl="$?"
+if [[ "${code_bl}" -eq 0 ]]; then
+  pass "system-report-pack degraded run exits 0"
+else
+  fail "system-report-pack degraded run exits 0 (got ${code_bl})"
+fi
+sr_bl_cpu_line="$(grep -F 'CPU:' "${SR_BL_STDOUT}" | head -n 1 || true)"
+if [[ "${sr_bl_cpu_line}" == *" (unavailable)"* && "${sr_bl_cpu_line}" == *"load 0.52, 0.48, 0.45"* ]]; then
+  pass "system-report-pack degraded CPU section shows (unavailable) and still renders the load"
+else
+  fail "system-report-pack degraded CPU section shows (unavailable) and still renders the load (got: ${sr_bl_cpu_line})"
+fi
+if grep -Fxq "Memory:  (unavailable)" "${SR_BL_STDOUT}"; then
+  pass "system-report-pack degraded Memory section shows (unavailable)"
+else
+  fail "system-report-pack degraded Memory section shows (unavailable)"
+fi
+if grep -Fxq "System:  mintbutler-lab | Linux Mint 22 | 6.8.0-48-generic | x86_64 | up 2 days, 3 hours, 41 minutes" "${SR_BL_STDOUT}"; then
+  pass "system-report-pack degraded System section still renders its canned values"
+else
+  fail "system-report-pack degraded System section still renders its canned values"
+fi
+if grep -Fxq "Disk /:  size 916G | used 234G | avail 633G | use 32%" "${SR_BL_STDOUT}"; then
+  pass "system-report-pack degraded Disk / section still renders its canned values"
+else
+  fail "system-report-pack degraded Disk / section still renders its canned values"
+fi
+if grep -Fxq "Session: type x11 | desktop X-Cinnamon" "${SR_BL_STDOUT}"; then
+  pass "system-report-pack degraded Session section still renders its canned values"
+else
+  fail "system-report-pack degraded Session section still renders its canned values"
+fi
+sr_bl_lines="$(wc -l < "${SR_BL_STDOUT}" || true)"
+if [[ "${sr_bl_lines}" -le 23 ]]; then
+  pass "system-report-pack degraded report fits the 23-line law (${sr_bl_lines} lines)"
+else
+  fail "system-report-pack degraded report fits the 23-line law (${sr_bl_lines} lines)"
+fi
+if diff -r "${SR_BL_HOME}" "${SR_BL_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "system-report-pack degraded run writes nothing to the fake HOME (byte-identical)"
+else
+  fail "system-report-pack degraded run modified the fake HOME"
+fi
+# The stub log must hold exactly the seven documented calls the degraded
+# set can make — and no lscpu call at all (the tool is absent).
+printf '%s\n' "uname -n" "uname -m" "uname -r" "uptime" "uptime -p" "df -h /" "free -h" | sort > "${SR_BL_LOG}.expected"
+if [[ -f "${SR_BL_LOG}" ]] && sort "${SR_BL_LOG}" | cmp -s - "${SR_BL_LOG}.expected"; then
+  pass "system-report-pack degraded stub log holds exactly the seven invocations with no lscpu"
+else
+  fail "system-report-pack degraded stub log holds exactly the seven invocations with no lscpu (got: $(cat "${SR_BL_LOG}" 2>/dev/null))"
+fi
+
+
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then
   exit 1
