@@ -1,0 +1,12 @@
+title: Printer helper
+description: >-
+  Reads the printing stack first — CUPS scheduler state, configured queues,
+  and detected devices — then guides setup in plain words using Mint's own
+  tools and driverless IPP Everywhere, never vendor drivers or blobs. The one
+  change it makes, pointing the default at a healthy queue when no default or a
+  stale one is set, is recorded and restorable on undo.
+risk: low
+undo: true
+needs: [lpstat, lpinfo, lpoptions]
+asks: 1
+order: 60
