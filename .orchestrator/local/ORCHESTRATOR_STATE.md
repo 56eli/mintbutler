@@ -22,8 +22,9 @@ docs/PROJECT_STATE.md on main — live since PR #1 (merged 2026-09-16).
 | 008 | .orchestrator/prompts/008-spec-pin-orchestrator-check.md | pin governing CORE v4.5 spec byte-faithful + tracker sha anchor + bin/orchestrator-check meta-tool with fixture tests (+ PR #5 distillation/deferred rows) | arena/01a0b02b-mintbutler (pinned; substitution recorded) | #6 | Merged 2026-09-17 (merge commit 1255277) |
 | 009 | .orchestrator/prompts/009-default-apps-editor.md | default-apps-editor: xdg-mime defaults with current-vs-new display, byte-for-byte mimeapps.list backup/restore undo | arena/01a0b065-mintbutler (pinned; substitution recorded) | #7 | Merged 2026-09-17 (merge commit 9674a43) |
 | 010 | .orchestrator/prompts/010-appimage-installer.md | appimage-installer: user-level AppImage install reusing lib/desktop-entry.sh, copy-never-move, undo removes entry+copy | arena/01a0b0c2-mintbutler + arena/01a0b14e-mintbutler (duplicate dispatch — see 2026-09-17 process note) | #8 (+#9 follow-up) | MERGED BEFORE REVIEW 2026-09-17 (d046064, b930e0b) — health+content branch run post-hoc: FULLY GREEN, no defects, no follow-up |
-| 011 | .orchestrator/prompts/011-timeshift-guardian.md | timeshift-guardian: diagnose-first Timeshift guardian, one confirmed additive snapshot, elevated, no undo (additive policy) | arena/01a0b18d-mintbutler (pinned; substitution recorded) | #10 | Re-reviewed 2026-09-17 after revision c26cf79 — MERGE advised, awaiting operator merge |
-| 012 | .orchestrator/prompts/012-revise-timeshift-guardian-sudo-display.md | REVISION of PR #10: helper-driven elevated-command display, no sudo literals in module.sh | arena/01a0b18d-mintbutler (continued) | #10 | Completed 2026-09-17 — fix verified, folded into PR #10 verdict |
+| 011 | .orchestrator/prompts/011-timeshift-guardian.md | timeshift-guardian: diagnose-first Timeshift guardian, one confirmed additive snapshot, elevated, no undo (additive policy) | arena/01a0b18d-mintbutler (pinned; substitution recorded) | #10 | Merged 2026-09-17 (merge commit a41bfb3, after revision 012) |
+| 012 | .orchestrator/prompts/012-revise-timeshift-guardian-sudo-display.md | REVISION of PR #10: helper-driven elevated-command display, no sudo literals in module.sh | arena/01a0b18d-mintbutler (continued) | #10 | Completed 2026-09-17 — fix verified; PR #10 merged a41bfb3 |
+| 013 | .orchestrator/prompts/013-audio-repair.md | audio-repair: diagnose-first sound doctor, honest newer-kernel verdict, one recorded undoable Master repair, elevated dmesg read | — | — | Published + dispatched 2026-09-17 |
 
 ## Active Milestone
 Module batch #1 (owner-approved 2026-09-16) — currently detoured to the owner's 2026-09-17 structural fix (spec pin + mechanical compliance check, task 008); screenshot-studio (007) is next in the build order.
@@ -48,8 +49,8 @@ Enforcement of bin/orchestrator-check publish-form/run-log-coverage begins at th
 - [x] 007: screenshot-studio — PR #5 merged 2026-09-17 (d576a42)
 - [x] 009: default-apps-editor — PR #7 merged 2026-09-17 (9674a43)
 - [x] 010: appimage-installer — PR #8 (+#9) merged 2026-09-17 (d046064, b930e0b) before review; post-hoc gate 199/0 + deliverables 1:1
-- [ ] 011: timeshift-guardian — PR #10 re-reviewed 2026-09-17, MERGE advised; awaiting operator merge
-- [ ] 013: audio-repair (Pending — build order 5; elevated, config-backup undo, diagnose-first, order 910)
+- [x] 011: timeshift-guardian — PR #10 merged 2026-09-17 (a41bfb3) after revision 012
+- [~] 013: audio-repair — IN PROGRESS (build order 5; elevated, diagnose-first, one recorded undoable Master repair, order 910); prompt published + dispatched
 - [ ] 014: multimedia-codecs (Pending — build order 6; order 40; elevated install, honest no-undo)
 - [ ] 015: printer-helper (Pending — build order 7; order 60; driverless/IPP-first, never vendor blobs; real-printer acceptance)
 - [ ] 016: system-report-pack (Pending — build order 8; order 70; additive report file, never installs inxi — plain-tool fallback)
@@ -180,3 +181,7 @@ Audited after materializing the governing prompt (owner drift ruling). Findings,
 - 2026-09-17 | publish | 012-revise-timeshift-guardian-sudo-display published (revision structure with the three guardrails)
 - 2026-09-17 | dispatch | 012 handed to operator (same branch arena/01a0b18d-mintbutler); stub first line: mintbutler agent
 - 2026-09-17 | verdict | 012 / PR #10 re-review — MERGE advised: revision c26cf79 is exactly the two directed lines via elevate_command_line with quoted placeholder; battery at final commit: 228/0, modulelint 5/5, dry-run 15 lines now shows quoted '<comment>' matching the run shape, bash -n clean, no forbidden tokens
+- 2026-09-17 | refresh-main | owner reported PR #10 merged (a41bfb3); main refreshed, net diff = exactly PR #10 content
+- 2026-09-17 | distillation | MERGE-verdict knowledge from 011: elevated display via elevate_command_line incl. quoted placeholders is now the enforced convention (already distilled to the hardening log; carried in-prompt for 013 via §4 fact 7)
+- 2026-09-17 | publish | 013-audio-repair published (conforming form; stage letters (ar)-(aw) derived from harness)
+- 2026-09-17 | dispatch | 013 handed to operator; stub first line: mintbutler agent
