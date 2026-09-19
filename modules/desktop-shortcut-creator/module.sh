@@ -39,19 +39,12 @@ dry_run() {
 Commands (with placeholders):
   # Custom launcher:
   cat <<'DESKTOP_EOF' > "$HOME/.local/share/applications/<sanitized-name>.desktop"
-  [Desktop Entry]
-  Type=Application
-  Name=<Name>
-  Exec=<Exec>
-  Comment=Created by mintbutler desktop-shortcut-creator
-  DESKTOP_EOF
+  ... DESKTOP_EOF  (contents: [Desktop Entry], Type=Application, Name=<Name>,
+  Exec=<Exec>, Comment=Created by mintbutler desktop-shortcut-creator)
   desktop-file-validate "$HOME/.local/share/applications/<sanitized-name>.desktop"
-  cp "$HOME/.local/share/applications/<sanitized-name>.desktop" "$HOME/Desktop/<sanitized-name>.desktop"
-  chmod +x "$HOME/Desktop/<sanitized-name>.desktop"
-  gio set "$HOME/Desktop/<sanitized-name>.desktop" metadata::trusted true
-
-  # Scan & place:
+  # Scan & place instead copies:
   cp "/usr/share/applications/<app>.desktop" "$HOME/Desktop/<sanitized-name>.desktop"
+  # Both lanes then place and trust:
   chmod +x "$HOME/Desktop/<sanitized-name>.desktop"
   gio set "$HOME/Desktop/<sanitized-name>.desktop" metadata::trusted true
 EOF

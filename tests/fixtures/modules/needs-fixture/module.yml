@@ -1,0 +1,7 @@
+title: Needs Fixture
+description: >-
+  Test fixture whose declared need is deliberately unsatisfiable: the menu must
+  refuse to launch it and --scan must warn about the missing need.
+risk: low
+undo: false
+needs: [mb-test-need-does-not-exist]

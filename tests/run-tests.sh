@@ -4,12 +4,47 @@ set -euo pipefail
 # tests/run-tests.sh — zero-dependency harness.
 # Copies butler + lib/ + fixture modules into a temp dir and runs
 # the real script there. No production hooks.
+#
+# Real-sudo consent switch (owner ruling 2026-09-18, MB-002):
+# Elevated stages exercise modules through STUB binaries on controlled PATHs
+# and must never reach a real sudo. By default this harness installs a
+# REFUSING, RECORDING sudo stub first on its own PATH — anything that would
+# reach the real sudo through the harness path trips the stub instead. The
+# real-sudo lane (stage bx) runs only when the harness is invoked with
+# explicit consent:
+#
+#   MB_TEST_ALLOW_REAL_SUDO=1 bash tests/run-tests.sh
+#
+# Without consent, stage (bx) reports itself skipped and stage (by) proves
+# the tripwire held: zero real sudo attempts across the whole run.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 TMPBASE="$(mktemp -d)"
 trap 'rm -rf "${TMPBASE}"' EXIT
+
+MB_TEST_ALLOW_REAL_SUDO="${MB_TEST_ALLOW_REAL_SUDO:-0}"
+MB_SUDO_TRIPWIRE_LOG=""
+MB_SAFE_BIN=""
+MB_SAFE_STUB_SHA=""
+if [[ "${MB_TEST_ALLOW_REAL_SUDO}" != "1" ]]; then
+  MB_SAFE_BIN="${TMPBASE}/mb-safe-bin"
+  mkdir -p "${MB_SAFE_BIN}"
+  MB_SUDO_TRIPWIRE_LOG="${TMPBASE}/mb-sudo-tripwire.log"
+  : > "${MB_SUDO_TRIPWIRE_LOG}"
+  cat <<'MB_SAFE_SUDO_STUB' > "${MB_SAFE_BIN}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'sudo %s\n' "$*" >> "${MB_SUDO_TRIPWIRE_LOG:?}"
+printf 'mb-safe-sudo: the real sudo is disabled inside the mintbutler test harness (set MB_TEST_ALLOW_REAL_SUDO=1 to consent)\n' >&2
+exit 1
+MB_SAFE_SUDO_STUB
+  chmod +x "${MB_SAFE_BIN}/sudo"
+  PATH="${MB_SAFE_BIN}:${PATH}"
+  MB_SAFE_STUB_SHA="$(sha256sum "${MB_SAFE_BIN}/sudo" | cut -d' ' -f1)"
+fi
+export MB_SUDO_TRIPWIRE_LOG
 
 STAGE="${TMPBASE}/stage"
 mkdir -p "${STAGE}"
@@ -1654,8 +1689,9 @@ else
   fail "non-interactive run modified the fake HOME"
 fi
 
-# Stage (ac): happy path — category 1, app 1, confirm y.
-printf 'Stage ac: default-apps-editor happy path\n'
+# Stage (ac): happy path — category 1, app 1; the menu confirmed, so the
+# module applies without asking anything (MB-004).
+printf 'Stage ac: default-apps-editor happy path (menu-confirmation law: no in-module apply prompt)\n'
 DA_AC_HOME="${TMPBASE}/da-home-ac"
 mkdir -p "${DA_AC_HOME}/.config"
 DA_AC_CONFIG="${DA_AC_HOME}/.config/mimeapps.list"
@@ -1667,12 +1703,17 @@ EOF
 cp "${DA_AC_CONFIG}" "${DA_AC_PRERUN}"
 output_ac=""
 code_ac="0"
-output_ac="$(printf '1\n1\ny\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AC_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+output_ac="$(printf '1\n1\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AC_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
   bash "${DA_MODULE}" run 2>&1)" || code_ac="$?"
 if [[ "${code_ac}" -eq 0 ]]; then
   pass "happy path run exits 0"
 else
   fail "happy path run exits 0 (got ${code_ac})"
+fi
+if printf '%s\n' "${output_ac}" | grep -qi '\[y/N\]'; then
+  fail "default-apps-editor asks no y/N question once launched (MB-004 completion violated)"
+else
+  pass "default-apps-editor asks no y/N question once launched (the menu confirms; MB-004 completion)"
 fi
 if printf '%s\n' "${output_ac}" | grep -q "current:" && printf '%s\n' "${output_ac}" | grep -q "new:"; then
   pass "happy path output shows current-versus-new"
@@ -1785,7 +1826,7 @@ EOF
 cp "${DA_AF_CONFIG}" "${DA_AF_PRERUN}"
 stderr_af=""
 code_af="0"
-stderr_af="$(printf '4\n1\ny\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AF_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+stderr_af="$(printf '4\n1\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AF_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
   XDG_MIME_STUB_QUERY_ALWAYS=someone-else.desktop bash "${DA_MODULE}" run 2>&1 >/dev/null)" || code_af="$?"
 if [[ "${code_af}" -eq 1 ]]; then
   pass "verify-failure run exits 1"
@@ -1988,13 +2029,18 @@ AI_AH_ENTRY="${AI_AH_APPS}/my-app-v1.desktop"
 AI_AH_STATE="${AI_AH_HOME}/${AI_STATE_REL}/my-app-v1.paths"
 output_ah=""
 code_ah="0"
-output_ah="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+output_ah="$(printf '%s\n\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
   MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AH_HOME}" \
   bash "${AI_MODULE}" run 2>&1)" || code_ah="$?"
 if [[ "${code_ah}" -eq 0 ]]; then
   pass "happy path run exits 0"
 else
   fail "happy path run exits 0 (got ${code_ah})"
+fi
+if printf '%s\n' "${output_ah}" | grep -qi '\[y/N\]'; then
+  fail "appimage-installer asks no y/N question once launched (MB-004 completion violated)"
+else
+  pass "appimage-installer asks no y/N question once launched (the menu confirms; MB-004 completion)"
 fi
 if [[ -f "${AI_AH_COPY}" && -x "${AI_AH_COPY}" ]] \
   && cmp -s "${AI_AH_COPY}" "${AI_FIXTURES}/My_App-v1.AppImage"; then
@@ -2030,7 +2076,7 @@ fi
 printf 'Stage ai: appimage-installer idempotency\n'
 output_ai=""
 code_ai="0"
-output_ai="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+output_ai="$(printf '%s\n\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
   MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AH_HOME}" \
   bash "${AI_MODULE}" run 2>&1)" || code_ai="$?"
 if [[ "${code_ai}" -eq 0 ]]; then
@@ -2151,7 +2197,7 @@ printf 'pre-existing different bytes\n' > "${AI_AL_INSTALL}/my-app-v1.AppImage"
 cp -a "${AI_AL_INSTALL}/my-app-v1.AppImage" "${TMPBASE}/ai-al-seed.ref"
 output_al=""
 code_al="0"
-output_al="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+output_al="$(printf '%s\n\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
   MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AL_HOME}" \
   bash "${AI_MODULE}" run 2>&1)" || code_al="$?"
 if [[ "${code_al}" -eq 0 ]]; then
@@ -2184,7 +2230,7 @@ mkdir -p "${AI_AL2_INSTALL}"
 cp "${AI_FIXTURES}/My_App-v1.AppImage" "${AI_AL2_INSTALL}/my-app-v1.AppImage"
 output_al2=""
 code_al2="0"
-output_al2="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+output_al2="$(printf '%s\n\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
   MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AL2_HOME}" \
   bash "${AI_MODULE}" run 2>&1)" || code_al2="$?"
 if [[ "${code_al2}" -eq 0 ]]; then
@@ -2348,7 +2394,10 @@ else
 fi
 
 # Stages (an)–(aq) invoke the module directly (bash modules/timeshift-guardian/module.sh run
-# with the stub PATH and piped stdin) since the menu path cannot script elevated confirmation.
+# with the stub PATH and controlled stdin). Under the menu-confirmation law (MODULE_SPEC §3,
+# MB-004) the menu takes the single confirmation for a run, so no in-module safety question
+# exists to script; the snapshot-comment VALUE question (Enter accepts the default, 'q'
+# aborts) is the one input a run still reads.
 
 # Stage (an): unconfigured variant
 printf 'Stage an: timeshift-guardian unconfigured guidance\n'
@@ -2369,10 +2418,22 @@ fi
 EOF_STUB_AN
 chmod +x "${TG_AN_BIN}/timeshift"
 
+# Recording passthrough sudo: logs the flat display line to ELEVATED_STUB_LOG
+# (when set) and the exact argv list — one word per line, calls separated by
+# '==' — to MB_ARGV_SUDO_LOG (when set), then runs the command unprivileged.
 cat <<'EOF_SUDO_PASS' > "${TG_AN_BIN}/sudo"
 #!/usr/bin/env bash
 set -euo pipefail
-"$@"
+LOG="${ELEVATED_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'sudo%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+ARGVLOG="${MB_ARGV_SUDO_LOG:-}"
+if [[ -n "${ARGVLOG}" && "$#" -gt 0 ]]; then
+  printf '%s\n' "$@" >> "${ARGVLOG}"
+  printf '==\n' >> "${ARGVLOG}"
+fi
+exec "$@"
 EOF_SUDO_PASS
 chmod +x "${TG_AN_BIN}/sudo"
 
@@ -2429,15 +2490,36 @@ cp "${TG_AN_BIN}/sudo" "${TG_AO_BIN}/sudo"
 
 output_ao=""
 code_ao="0"
-# Scripted stdin = Enter (accept default comment) then y (confirm)
-output_ao="$(export AO_LOG; printf '\ny\n' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ao="$?"
+AO_ARGV_LOG="${TMPBASE}/tg-ao-argv.log"
+rm -f "${AO_ARGV_LOG}"
+# Scripted stdin = Enter (accept the default comment). There is nothing else to
+# answer: the menu already took the single confirmation for this run.
+output_ao="$(export AO_LOG MB_ARGV_SUDO_LOG="${AO_ARGV_LOG}"; printf '\n' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ao="$?"
 if [[ "${code_ao}" -eq 0 ]]; then
   pass "timeshift-guardian configured happy path exits 0"
 else
   fail "timeshift-guardian configured happy path exits 0 (got ${code_ao})"
 fi
+if ! printf '%s\n' "${output_ao}" | grep -q '\[y/N\]'; then
+  pass "timeshift-guardian asks no y/N question once launched (the menu confirms; MB-004)"
+else
+  fail "timeshift-guardian asks no y/N question once launched (MB-004 violated)"
+fi
+# The elevated argv proof (MB-001): the recording sudo stub saw EXACTLY
+# list / create --comments <one comment word> / list — and the default
+# comment, spaces and all, arrived as a single argv word.
+{
+  printf 'timeshift\n--list\n==\n'
+  printf 'timeshift\n--create\n--comments\n%s\n==\n' "mintbutler guard $(date +%Y-%m-%d)"
+  printf 'timeshift\n--list\n==\n'
+} > "${AO_ARGV_LOG}.expected"
+if [[ -f "${AO_ARGV_LOG}" ]] && cmp -s "${AO_ARGV_LOG}" "${AO_ARGV_LOG}.expected"; then
+  pass "timeshift-guardian elevated steps reach sudo as exact argv lists (the comment is ONE word)"
+else
+  fail "timeshift-guardian elevated steps reach sudo as exact argv lists (got: $(cat "${AO_ARGV_LOG}" 2>/dev/null))"
+fi
 if grep -q -- "--list" "${AO_LOG}" \
-  && grep -E "timeshift --create --comments 'mintbutler guard" "${AO_LOG}" >/dev/null; then
+  && grep -Eq "^timeshift --create --comments mintbutler guard [0-9]{4}-[0-9]{2}-[0-9]{2}$" "${AO_LOG}" >/dev/null; then
   pass "timeshift-guardian happy path log shows --list, --create with default comment, and --list again"
 else
   fail "timeshift-guardian happy path log shows --list, --create with default comment, and --list again"
@@ -2460,28 +2542,51 @@ else
   fail "timeshift-guardian happy path shows additive statement"
 fi
 
-# Stage (ap): confirm-no
-printf 'Stage ap: timeshift-guardian confirm-no\n'
+# Stage (ap): the module's one remaining question honours its aborts — 'q' on
+# the comment, and EOF on the comment (e.g. a closed stdin). Both exit 0 with
+# "Nothing changed.", and the stub log must show the status read (--list) but
+# never a snapshot creation (--create).
+printf 'Stage ap: timeshift-guardian comment-question aborts (q and EOF)\n'
 AP_LOG="${TMPBASE}/tg-ap.log"
 rm -f "${AP_LOG}"
 output_ap=""
 code_ap="0"
-# Scripted stdin = Enter then n
-output_ap="$(export AO_LOG="${AP_LOG}"; printf '\nn\n' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ap="$?"
+output_ap="$(export AO_LOG="${AP_LOG}"; printf 'q\n' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ap="$?"
 if [[ "${code_ap}" -eq 0 ]]; then
-  pass "timeshift-guardian confirm-no exits 0"
+  pass "timeshift-guardian comment-abort (q) exits 0"
 else
-  fail "timeshift-guardian confirm-no exits 0 (got ${code_ap})"
+  fail "timeshift-guardian comment-abort (q) exits 0 (got ${code_ap})"
 fi
 if printf '%s\n' "${output_ap}" | grep -qi "Nothing changed"; then
-  pass "timeshift-guardian confirm-no outputs 'Nothing changed.'"
+  pass "timeshift-guardian comment-abort (q) outputs 'Nothing changed.'"
 else
-  fail "timeshift-guardian confirm-no outputs 'Nothing changed.'"
+  fail "timeshift-guardian comment-abort (q) outputs 'Nothing changed.'"
 fi
 if grep -q -- "--list" "${AP_LOG}" && ! grep -q -- "--create" "${AP_LOG}"; then
-  pass "timeshift-guardian confirm-no log contains --list but NO --create"
+  pass "timeshift-guardian comment-abort (q) log contains --list but NO --create"
 else
-  fail "timeshift-guardian confirm-no log contains --list but NO --create"
+  fail "timeshift-guardian comment-abort (q) log contains --list but NO --create"
+fi
+
+AP2_LOG="${TMPBASE}/tg-ap2.log"
+rm -f "${AP2_LOG}"
+output_ap2=""
+code_ap2="0"
+output_ap2="$(export AO_LOG="${AP2_LOG}"; printf '' | PATH="${TG_AO_BIN}" bash "${TG_MODULE}" run 2>&1)" || code_ap2="$?"
+if [[ "${code_ap2}" -eq 0 ]]; then
+  pass "timeshift-guardian comment-abort (EOF) exits 0"
+else
+  fail "timeshift-guardian comment-abort (EOF) exits 0 (got ${code_ap2})"
+fi
+if printf '%s\n' "${output_ap2}" | grep -qi "Nothing changed"; then
+  pass "timeshift-guardian comment-abort (EOF) outputs 'Nothing changed.'"
+else
+  fail "timeshift-guardian comment-abort (EOF) outputs 'Nothing changed.'"
+fi
+if grep -q -- "--list" "${AP2_LOG}" && ! grep -q -- "--create" "${AP2_LOG}"; then
+  pass "timeshift-guardian comment-abort (EOF) log contains --list but NO --create"
+else
+  fail "timeshift-guardian comment-abort (EOF) log contains --list but NO --create"
 fi
 
 # Stage (aq): elevated-failure path
@@ -2504,7 +2609,7 @@ output_aq=""
 stderr_aq=""
 code_aq="0"
 USED_AQ_STDERR="${TMPBASE}/tg-aq.stderr"
-output_aq="$(export AO_LOG="${AQ_LOG}"; printf '\ny\n' | PATH="${TG_AQ_BIN}" bash "${TG_MODULE}" run 2>"${USED_AQ_STDERR}")" || code_aq="$?"
+output_aq="$(export AO_LOG="${AQ_LOG}"; printf '\n' | PATH="${TG_AQ_BIN}" bash "${TG_MODULE}" run 2>"${USED_AQ_STDERR}")" || code_aq="$?"
 if [[ "${code_aq}" -ne 0 ]]; then
   pass "timeshift-guardian elevated-failure exits non-zero (got ${code_aq})"
 else
@@ -2529,9 +2634,9 @@ fi
 # dmesg/sudo plus symlinks to the coreutils the module needs) and a fake
 # HOME under mktemp. No stage ever invokes real pactl, amixer, dmesg, or
 # sudo: the elevated dmesg path goes through a stub sudo that runs the stub
-# dmesg (stage (aw) uses a refusing sudo instead). Where the module's
-# interactive confirmation matters, stages drive the module binary directly
-# with piped stdin (the menu path cannot script elevated confirmation).
+# dmesg (stage (aw) uses a refusing sudo instead). Under the menu-confirmation
+# law (MODULE_SPEC §3, MB-004) this module asks nothing itself, so stages drive
+# the module binary directly with stdin closed.
 # ---------------------------------------------------------------------------
 
 AR_MODULE="${REPO_ROOT}/modules/audio-repair/module.sh"
@@ -2937,8 +3042,10 @@ else
   fail "audio-repair driver/firmware path never writes to the mixer"
 fi
 
-# Stage (au): muted Master at 0% — scripted stdin y accepts the repair.
-printf 'Stage au: audio-repair muted Master repair (confirm yes)\n'
+# Stage (au): muted Master at 0% — stdin is CLOSED and the repair still runs
+# start to finish with no question: the menu took the single confirmation
+# before launch (MODULE_SPEC §3, MB-004).
+printf 'Stage au: audio-repair muted Master repair with stdin closed (menu-confirmation law)\n'
 AR_AU_HOME="${TMPBASE}/ar-home-au"
 AR_AU_MIXER="${TMPBASE}/ar-mixer-au.txt"
 mkdir -p "${AR_AU_HOME}"
@@ -2946,11 +3053,16 @@ printf 'muted=1\nvolume=0\n' > "${AR_AU_MIXER}"
 AU_AMIXER_LOG="${TMPBASE}/ar-au-amixer.log"
 output_au=""
 code_au="0"
-output_au="$(printf 'y\n' | PATH="${AR_BIN_MAIN}" HOME="${AR_AU_HOME}" \
+output_au="$(PATH="${AR_BIN_MAIN}" HOME="${AR_AU_HOME}" \
   PACTL_STUB_LOG="${TMPBASE}/ar-au-pactl.log" \
   AMIXER_STUB_STATE="${AR_AU_MIXER}" AMIXER_STUB_LOG="${AU_AMIXER_LOG}" \
   ELEVATED_STUB_LOG="${TMPBASE}/ar-au-elevated.log" \
-  bash "${AR_MODULE}" run 2>&1)" || code_au="$?"
+  bash "${AR_MODULE}" run < /dev/null 2>&1)" || code_au="$?"
+if ! printf '%s\n' "${output_au}" | grep -q '\[y/N\]'; then
+  pass "audio-repair asks no y/N question once launched (the menu confirms; MB-004)"
+else
+  fail "audio-repair asks no y/N question once launched (MB-004 violated)"
+fi
 if [[ "${code_au}" -eq 0 ]]; then
   pass "audio-repair muted repair exits 0"
 else
@@ -2980,7 +3092,7 @@ if grep -q "^muted=0$" "${AR_AU_MIXER}" && grep -q "^volume=100$" "${AR_AU_MIXER
 else
   fail "audio-repair repair leaves the stub mixer unmuted at 100%"
 fi
-if printf '%s\n' "${output_au}" | grep -qi "undo"; then
+if printf '%s\n' "${output_au}" | grep -Fq "[u]ndo in the menu restores it exactly"; then
   pass "audio-repair repair output points at undo for the recorded state"
 else
   fail "audio-repair repair output points at undo for the recorded state"
@@ -3028,38 +3140,47 @@ else
   fail "audio-repair second undo reports Nothing to undo and exits 0 (got ${code_av2})"
 fi
 
-# Stage (aw): confirm-no on the muted fixture, then the elevated-failure
-# path with a refusing sudo.
-printf 'Stage aw: audio-repair confirm-no and elevated failure\n'
+# Stage (aw): the preserved-volume repair with stdin CLOSED (a muted Master
+# whose volume is 22% is unmuted AT 22%, not reset to 100%), with no question
+# asked — the menu took the single confirmation (MB-004). Then the
+# elevated-failure path with a refusing sudo.
+printf 'Stage aw: audio-repair preserved-volume repair with stdin closed, and elevated failure\n'
 AR_AW_HOME="${TMPBASE}/ar-home-aw"
 AR_AW_MIXER="${TMPBASE}/ar-mixer-aw.txt"
 mkdir -p "${AR_AW_HOME}"
-printf 'muted=1\nvolume=0\n' > "${AR_AW_MIXER}"
+printf 'muted=1\nvolume=22\n' > "${AR_AW_MIXER}"
 AW_AMIXER_LOG="${TMPBASE}/ar-aw-amixer.log"
 output_aw=""
 code_aw="0"
-output_aw="$(printf 'n\n' | PATH="${AR_BIN_MAIN}" HOME="${AR_AW_HOME}" \
+output_aw="$(PATH="${AR_BIN_MAIN}" HOME="${AR_AW_HOME}" \
   AMIXER_STUB_STATE="${AR_AW_MIXER}" AMIXER_STUB_LOG="${AW_AMIXER_LOG}" \
-  bash "${AR_MODULE}" run 2>&1)" || code_aw="$?"
+  bash "${AR_MODULE}" run < /dev/null 2>&1)" || code_aw="$?"
 if [[ "${code_aw}" -eq 0 ]]; then
-  pass "audio-repair confirm-no exits 0"
+  pass "audio-repair preserved-volume repair exits 0"
 else
-  fail "audio-repair confirm-no exits 0 (got ${code_aw})"
+  fail "audio-repair preserved-volume repair exits 0 (got ${code_aw})"
 fi
-if printf '%s\n' "${output_aw}" | grep -q "Nothing changed."; then
-  pass "audio-repair confirm-no prints Nothing changed."
+if ! printf '%s\n' "${output_aw}" | grep -q '\[y/N\]'; then
+  pass "audio-repair preserved-volume repair asks no y/N question (MB-004)"
 else
-  fail "audio-repair confirm-no prints Nothing changed."
+  fail "audio-repair preserved-volume repair asks no y/N question (MB-004 violated)"
 fi
-if [[ ! -e "${AR_AW_HOME}/${AR_STATE_REL}" ]]; then
-  pass "audio-repair confirm-no writes no state"
+if grep -q "sset Master 22% unmute" "${AW_AMIXER_LOG}"; then
+  pass "audio-repair preserves the nonzero volume (amixer -q sset Master 22% unmute)"
 else
-  fail "audio-repair confirm-no writes no state"
+  fail "audio-repair preserves the nonzero volume (got: $(cat "${AW_AMIXER_LOG}" 2>/dev/null))"
 fi
-if [[ ! -f "${AW_AMIXER_LOG}" ]] || ! grep -q "sset" "${AW_AMIXER_LOG}"; then
-  pass "audio-repair confirm-no never touches the mixer"
+if [[ -f "${AR_AW_HOME}/${AR_STATE_REL}" ]] \
+  && grep -q "^muted=1$" "${AR_AW_HOME}/${AR_STATE_REL}" \
+  && grep -q "^volume=22$" "${AR_AW_HOME}/${AR_STATE_REL}"; then
+  pass "audio-repair preserved-volume repair records the prior muted=1 volume=22 state"
 else
-  fail "audio-repair confirm-no never touches the mixer"
+  fail "audio-repair preserved-volume repair records the prior muted=1 volume=22 state"
+fi
+if grep -q "^muted=0$" "${AR_AW_MIXER}" && grep -q "^volume=22$" "${AR_AW_MIXER}"; then
+  pass "audio-repair preserved-volume repair leaves the stub mixer unmuted at 22%"
+else
+  fail "audio-repair preserved-volume repair leaves the stub mixer unmuted at 22% (got: $(cat "${AR_AW_MIXER}"))"
 fi
 
 AR_AW2_HOME="${TMPBASE}/ar-home-aw2"
@@ -3100,11 +3221,9 @@ fi
 # the stub apt-get only appends package names to the stub dpkg state file
 # (it NEVER performs a real install or removal), and the elevated path goes
 # through a stub sudo that runs its command (stage (bc) uses a refusing sudo
-# instead). Where the module's interactive confirmation matters, stages
-# drive the module binary directly with piped stdin (the menu path cannot
-# script elevated confirmation). Note: with scripted stdin, the ask prompt
-# (stderr, no trailing newline) shares its line with whatever stderr writes
-# next — assertions account for that.
+# instead). Under the menu-confirmation law (MODULE_SPEC §3, MB-004) this
+# module asks nothing itself, so stages drive the module binary directly with
+# stdin closed.
 # ---------------------------------------------------------------------------
 
 MC_MODULE="${REPO_ROOT}/modules/multimedia-codecs/module.sh"
@@ -3512,57 +3631,72 @@ else
   fail "multimedia-codecs all-installed run wrote something (fake HOME differs or .local exists)"
 fi
 
-# Stage (az): two missing + confirm-no -> exit 0, "Nothing installed.",
-# no apt-get call in the stub log, nothing written. Driven with piped
-# stdin 'n' (the menu path cannot script elevated confirmation).
-printf 'Stage az: multimedia-codecs missing + confirm-no\n'
+# Stage (az): two missing + stdin CLOSED -> the install runs start to finish
+# with NO question asked: the menu took the single confirmation for this run
+# before launch (MODULE_SPEC §3, MB-004). Exactly one apt-get install call
+# naming exactly the two missing packages, and no "Nothing installed."
+# refusal text anywhere.
+printf 'Stage az: multimedia-codecs installs with stdin closed and asks nothing (menu-confirmation law)\n'
 MC_AZ_HOME="${TMPBASE}/mc-home-az"
 MC_AZ_HOME_BEFORE="${TMPBASE}/mc-home-az-before"
 mkdir -p "${MC_AZ_HOME}"
 cp -a "${MC_AZ_HOME}" "${MC_AZ_HOME_BEFORE}"
 MC_AZ_STATE="${TMPBASE}/mc-az-packages.txt"
 mc_seed_state "${MC_AZ_STATE}" "${MC_PKG_BAD}" "${MC_PKG_UGLY}"
-cp "${MC_AZ_STATE}" "${MC_AZ_STATE}.seeded"
 AZ_APT="${TMPBASE}/mc-az-aptget.log"
 AZ_ELEV="${TMPBASE}/mc-az-elevated.log"
 output_az=""
 code_az="0"
-output_az="$(printf 'n\n' | PATH="${MC_BIN_PASS}" HOME="${MC_AZ_HOME}" \
+output_az="$(PATH="${MC_BIN_PASS}" HOME="${MC_AZ_HOME}" \
   DPKG_STUB_STATE="${MC_AZ_STATE}" APTGET_STUB_LOG="${AZ_APT}" ELEVATED_STUB_LOG="${AZ_ELEV}" \
-  bash "${MC_MODULE}" run 2>&1)" || code_az="$?"
+  bash "${MC_MODULE}" run < /dev/null 2>&1)" || code_az="$?"
 if [[ "${code_az}" -eq 0 ]]; then
-  pass "multimedia-codecs confirm-no exits 0"
+  pass "multimedia-codecs stdin-closed install exits 0"
 else
-  fail "multimedia-codecs confirm-no exits 0 (got ${code_az})"
-fi
-if printf '%s\n' "${output_az}" | grep -Fq "Nothing installed."; then
-  pass "multimedia-codecs confirm-no prints Nothing installed."
-else
-  fail "multimedia-codecs confirm-no prints Nothing installed."
+  fail "multimedia-codecs stdin-closed install exits 0 (got ${code_az})"
 fi
 if printf '%s\n' "${output_az}" | grep -Fq "missing:   ${MC_PKG_LIBAV}, ${MC_PKG_EXTRA}"; then
-  pass "multimedia-codecs confirm-no names the two missing packages first"
+  pass "multimedia-codecs stdin-closed install names the two missing packages"
 else
-  fail "multimedia-codecs confirm-no names the two missing packages first"
+  fail "multimedia-codecs stdin-closed install names the two missing packages"
 fi
-if [[ ! -e "${AZ_APT}" ]] && [[ ! -s "${AZ_ELEV}" ]]; then
-  pass "multimedia-codecs confirm-no makes no apt-get and no elevated call"
+if ! printf '%s\n' "${output_az}" | grep -Fq "Nothing installed."; then
+  pass "multimedia-codecs has no Nothing-installed refusal path anymore (menu confirms)"
 else
-  fail "multimedia-codecs confirm-no makes no apt-get and no elevated call"
+  fail "multimedia-codecs still prints Nothing installed."
 fi
-if cmp -s "${MC_AZ_STATE}" "${MC_AZ_STATE}.seeded" \
-  && diff -r "${MC_AZ_HOME}" "${MC_AZ_HOME_BEFORE}" >/dev/null 2>&1; then
-  pass "multimedia-codecs confirm-no writes nothing (state and fake HOME byte-identical)"
+if ! printf '%s\n' "${output_az}" | grep -q '\[y/N\]'; then
+  pass "multimedia-codecs asks no y/N question once launched (MB-004)"
 else
-  fail "multimedia-codecs confirm-no wrote something"
+  fail "multimedia-codecs asks no y/N question once launched (MB-004 violated)"
+fi
+az_apt_lines="0"
+if [[ -f "${AZ_APT}" ]]; then
+  az_apt_lines="$(grep -c '^apt-get install -y ' "${AZ_APT}" || true)"
+fi
+if [[ "${az_apt_lines}" -eq 1 ]] \
+  && grep -Fxq "apt-get install -y ${MC_PKG_LIBAV} ${MC_PKG_EXTRA}" "${AZ_APT}"; then
+  pass "multimedia-codecs stdin-closed install makes exactly one apt-get install call for the two missing packages"
+else
+  fail "multimedia-codecs stdin-closed install makes exactly one apt-get install call for the two missing packages (got ${az_apt_lines} lines)"
+fi
+if grep -q "^${MC_PKG_LIBAV}$" "${MC_AZ_STATE}" && grep -q "^${MC_PKG_EXTRA}$" "${MC_AZ_STATE}"; then
+  pass "multimedia-codecs stdin-closed install flips both missing packages to installed"
+else
+  fail "multimedia-codecs stdin-closed install flips both missing packages to installed"
+fi
+if diff -r "${MC_AZ_HOME}" "${MC_AZ_HOME_BEFORE}" >/dev/null 2>&1; then
+  pass "multimedia-codecs stdin-closed install writes nothing to the fake HOME"
+else
+  fail "multimedia-codecs stdin-closed install modified the fake HOME"
 fi
 
-# Stage (ba): two missing + confirm-yes + full success. Scripted stdin 'y';
-# the stub apt-get exits 0 and flips the two missing packages to installed
+# Stage (ba): two missing + full success, stdin closed (the menu confirms).
+# The stub apt-get exits 0 and flips the two missing packages to installed
 # in the stub dpkg state, so the module's per-package verification sees
 # success. Asserts the honest full report and exactly one stub apt-get
 # install call naming exactly the two missing packages.
-printf 'Stage ba: multimedia-codecs confirm-yes full success\n'
+printf 'Stage ba: multimedia-codecs full success report\n'
 MC_BA_HOME="${TMPBASE}/mc-home-ba"
 MC_BA_HOME_BEFORE="${TMPBASE}/mc-home-ba-before"
 mkdir -p "${MC_BA_HOME}"
@@ -3573,9 +3707,9 @@ BA_APT="${TMPBASE}/mc-ba-aptget.log"
 BA_ELEV="${TMPBASE}/mc-ba-elevated.log"
 output_ba=""
 code_ba="0"
-output_ba="$(printf 'y\n' | PATH="${MC_BIN_PASS}" HOME="${MC_BA_HOME}" \
+output_ba="$(PATH="${MC_BIN_PASS}" HOME="${MC_BA_HOME}" \
   DPKG_STUB_STATE="${MC_BA_STATE}" APTGET_STUB_LOG="${BA_APT}" ELEVATED_STUB_LOG="${BA_ELEV}" \
-  bash "${MC_MODULE}" run 2>&1)" || code_ba="$?"
+  bash "${MC_MODULE}" run < /dev/null 2>&1)" || code_ba="$?"
 if [[ "${code_ba}" -eq 0 ]]; then
   pass "multimedia-codecs full-success run exits 0"
 else
@@ -3583,9 +3717,9 @@ else
 fi
 if printf '%s\n' "${output_ba}" | grep -Fq "installed: ${MC_PKG_BAD}, ${MC_PKG_UGLY}" \
   && printf '%s\n' "${output_ba}" | grep -Fq "missing:   ${MC_PKG_LIBAV}, ${MC_PKG_EXTRA}"; then
-  pass "multimedia-codecs full success shows installed-vs-missing before confirming"
+  pass "multimedia-codecs full success shows installed-vs-missing before the elevated step"
 else
-  fail "multimedia-codecs full success shows installed-vs-missing before confirming"
+  fail "multimedia-codecs full success shows installed-vs-missing before the elevated step"
 fi
 mc_ba_missing_line="$(printf '%s\n' "${output_ba}" | grep -n -F "missing:" | head -n 1 | cut -d: -f1 || true)"
 mc_ba_elev_line="$(printf '%s\n' "${output_ba}" | grep -n -F "Running elevated command" | head -n 1 | cut -d: -f1 || true)"
@@ -3638,12 +3772,12 @@ else
   fail "multimedia-codecs full success modified the fake HOME"
 fi
 
-# Stage (bb): confirm-yes + MIXED result. The stub apt-get exits 0 but
+# Stage (bb): MIXED result, stdin closed. The stub apt-get exits 0 but
 # APTGET_STUB_SKIP keeps libavcodec-extra missing in the stub dpkg state,
 # so verification reports one installed and one failed package: exit 1,
 # per-package lists and the plain retry hint on stdout, one plain stderr
-# line (the ask prompt shares its stderr line under scripted stdin).
-printf 'Stage bb: multimedia-codecs confirm-yes mixed result\n'
+# line.
+printf 'Stage bb: multimedia-codecs mixed result\n'
 MC_BB_HOME="${TMPBASE}/mc-home-bb"
 MC_BB_HOME_BEFORE="${TMPBASE}/mc-home-bb-before"
 mkdir -p "${MC_BB_HOME}"
@@ -3654,10 +3788,10 @@ BB_APT="${TMPBASE}/mc-bb-aptget.log"
 BB_STDOUT="${TMPBASE}/mc-bb.stdout"
 BB_STDERR="${TMPBASE}/mc-bb.stderr"
 code_bb="0"
-printf 'y\n' | PATH="${MC_BIN_PASS}" HOME="${MC_BB_HOME}" \
+PATH="${MC_BIN_PASS}" HOME="${MC_BB_HOME}" \
   DPKG_STUB_STATE="${MC_BB_STATE}" APTGET_STUB_SKIP="${MC_PKG_EXTRA}" \
   APTGET_STUB_LOG="${BB_APT}" \
-  bash "${MC_MODULE}" run > "${BB_STDOUT}" 2> "${BB_STDERR}" || code_bb="$?"
+  bash "${MC_MODULE}" run < /dev/null > "${BB_STDOUT}" 2> "${BB_STDERR}" || code_bb="$?"
 if [[ "${code_bb}" -eq 1 ]]; then
   pass "multimedia-codecs mixed result exits 1"
 else
@@ -3698,11 +3832,10 @@ else
   fail "multimedia-codecs mixed result modified the fake HOME"
 fi
 
-# Stage (bc): elevated failure. The stub sudo refuses, so the single
-# elevated apt-get step fails: non-zero exit, one plain stderr line naming
-# the failed elevated step (lines carrying the stub refusal are filtered;
-# under scripted stdin the ask prompt shares the refusal's line), nothing
-# claimed on stdout, nothing written anywhere.
+# Stage (bc): elevated failure, stdin closed. The stub sudo refuses, so the
+# single elevated apt-get step fails: non-zero exit, one plain stderr line
+# naming the failed elevated step (lines carrying the stub refusal are
+# filtered), nothing claimed on stdout, nothing written anywhere.
 printf 'Stage bc: multimedia-codecs elevated failure\n'
 MC_BC_HOME="${TMPBASE}/mc-home-bc"
 MC_BC_HOME_BEFORE="${TMPBASE}/mc-home-bc-before"
@@ -3715,15 +3848,15 @@ BC_APT="${TMPBASE}/mc-bc-aptget.log"
 BC_STDOUT="${TMPBASE}/mc-bc.stdout"
 BC_STDERR="${TMPBASE}/mc-bc.stderr"
 code_bc="0"
-printf 'y\n' | PATH="${MC_BIN_FAIL}" HOME="${MC_BC_HOME}" \
+PATH="${MC_BIN_FAIL}" HOME="${MC_BC_HOME}" \
   DPKG_STUB_STATE="${MC_BC_STATE}" APTGET_STUB_LOG="${BC_APT}" \
-  bash "${MC_MODULE}" run > "${BC_STDOUT}" 2> "${BC_STDERR}" || code_bc="$?"
+  bash "${MC_MODULE}" run < /dev/null > "${BC_STDOUT}" 2> "${BC_STDERR}" || code_bc="$?"
 if [[ "${code_bc}" -ne 0 ]]; then
   pass "multimedia-codecs elevated failure exits non-zero (got ${code_bc})"
 else
   fail "multimedia-codecs elevated failure exits non-zero"
 fi
-bc_module_lines="$(grep -v 'sudo-stub:' "${BC_STDERR}" | grep -v 'Install the missing codec packages now' | grep -c . || true)"
+bc_module_lines="$(grep -v 'sudo-stub:' "${BC_STDERR}" | grep -c . || true)"
 if [[ "${bc_module_lines}" -eq 1 ]] && grep -q "elevated apt-get step failed" "${BC_STDERR}"; then
   pass "multimedia-codecs elevated failure prints one plain stderr line naming the failed elevated step"
 else
@@ -3753,9 +3886,9 @@ fi
 # lpoptions plus symlinks to the coreutils the module needs) and a fake HOME
 # under mktemp. No stage ever invokes a real CUPS tool, and no stub ever
 # touches the real printing stack: the stub lpoptions only rewrites a stub
-# state file. Where the module's interactive confirmation matters, stages
-# drive the module binary directly with piped stdin (the menu path cannot
-# script a confirmation).
+# state file. Under the menu-confirmation law (MODULE_SPEC §3, MB-004) this
+# module asks nothing itself, so stages drive the module binary directly
+# with stdin closed.
 # ---------------------------------------------------------------------------
 
 PH_MODULE="${REPO_ROOT}/modules/printer-helper/module.sh"
@@ -4257,9 +4390,11 @@ else
   fail "printer-helper no-queue path modified the fake HOME"
 fi
 
-# Stage (bh): default repair + undo. One idle queue and NO default; scripted
-# stdin 'y' accepts the repair, then undo restores "no default" again.
-printf 'Stage bh: printer-helper default repair and undo\n'
+# Stage (bh): default repair + undo. One idle queue and NO default; stdin is
+# CLOSED and the repair still runs start to finish with no question — the
+# menu took the single confirmation before launch (MODULE_SPEC §3, MB-004).
+# Then undo restores "no default" again.
+printf 'Stage bh: printer-helper default repair with stdin closed (menu-confirmation law), and undo\n'
 PH_BH_HOME="${TMPBASE}/ph-home-bh"
 PH_BH_STATE="${TMPBASE}/ph-bh-default.txt"
 mkdir -p "${PH_BH_HOME}"
@@ -4267,20 +4402,25 @@ printf 'default=none\n' > "${PH_BH_STATE}"
 BH_OPT="${TMPBASE}/ph-bh-lpoptions.log"
 output_bh=""
 code_bh="0"
-output_bh="$(printf 'y\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME="" \
+output_bh="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BH_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BH_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BH_OPT}" \
-  bash "${PH_MODULE}" run 2>&1)" || code_bh="$?"
+  bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_bh="$?"
 if [[ "${code_bh}" -eq 0 ]]; then
   pass "printer-helper default repair exits 0"
 else
   fail "printer-helper default repair exits 0 (got ${code_bh})"
 fi
+if ! printf '%s\n' "${output_bh}" | grep -q '\[y/N\]'; then
+  pass "printer-helper asks no y/N question once launched (the menu confirms; MB-004)"
+else
+  fail "printer-helper asks no y/N question once launched (MB-004 violated)"
+fi
 if printf '%s\n' "${output_bh}" | grep -q "current:" \
   && printf '%s\n' "${output_bh}" | grep -q "proposed:"; then
-  pass "printer-helper repair offer shows current-vs-proposed before confirming"
+  pass "printer-helper repair shows current-vs-proposed before applying"
 else
-  fail "printer-helper repair offer shows current-vs-proposed before confirming"
+  fail "printer-helper repair shows current-vs-proposed before applying"
 fi
 PH_BH_RECORD="${PH_BH_HOME}/${PH_STATE_REL}"
 if [[ -f "${PH_BH_RECORD}" ]] && grep -q "^prev_default=none$" "${PH_BH_RECORD}"; then
@@ -4299,7 +4439,7 @@ if grep -q "^default=OfficeJet-5200$" "${PH_BH_STATE}"; then
 else
   fail "printer-helper repair leaves the stub stack pointing at the new default"
 fi
-if printf '%s\n' "${output_bh}" | grep -qi "undo"; then
+if printf '%s\n' "${output_bh}" | grep -Fq "[u]ndo in the menu restores it exactly"; then
   pass "printer-helper repair output points at undo for the recorded default"
 else
   fail "printer-helper repair output points at undo for the recorded default"
@@ -4369,46 +4509,48 @@ else
   fail "printer-helper undo without lpoptions keeps the record"
 fi
 
-# Stage (bi): confirm-no, and the apply-failure path with a stub lpoptions
-# that refuses -d.
-printf 'Stage bi: printer-helper confirm-no and apply failure\n'
+# Stage (bi): the repair applies with stdin CLOSED and no question asked at
+# all (menu-confirmation law proof on the orphaned-default lane: the default
+# names a queue that no longer exists, one healthy queue remains), then the
+# apply-failure path with a stub lpoptions that refuses -d.
+printf 'Stage bi: printer-helper stdin-closed repair (orphaned default) and apply failure\n'
 PH_BI_HOME="${TMPBASE}/ph-home-bi"
 PH_BI_HOME_BEFORE="${TMPBASE}/ph-home-bi-before"
 PH_BI_STATE="${TMPBASE}/ph-bi-default.txt"
 mkdir -p "${PH_BI_HOME}"
 cp -a "${PH_BI_HOME}" "${PH_BI_HOME_BEFORE}"
-printf 'default=none\n' > "${PH_BI_STATE}"
+printf 'default=Ghost-9400\n' > "${PH_BI_STATE}"
 BI_OPT="${TMPBASE}/ph-bi-lpoptions.log"
 output_bi=""
 code_bi="0"
-output_bi="$(printf 'n\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BI_HOME}" XDG_STATE_HOME="" \
+output_bi="$(PATH="${PH_BIN_MAIN}" HOME="${PH_BI_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BI_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BI_OPT}" \
-  bash "${PH_MODULE}" run 2>&1)" || code_bi="$?"
+  bash "${PH_MODULE}" run < /dev/null 2>&1)" || code_bi="$?"
 if [[ "${code_bi}" -eq 0 ]]; then
-  pass "printer-helper confirm-no exits 0"
+  pass "printer-helper stdin-closed repair (orphaned default) exits 0"
 else
-  fail "printer-helper confirm-no exits 0 (got ${code_bi})"
+  fail "printer-helper stdin-closed repair (orphaned default) exits 0 (got ${code_bi})"
 fi
-if printf '%s\n' "${output_bi}" | grep -q "Nothing changed."; then
-  pass "printer-helper confirm-no prints Nothing changed."
+if ! printf '%s\n' "${output_bi}" | grep -q '\[y/N\]'; then
+  pass "printer-helper orphaned-default repair asks no y/N question (MB-004)"
 else
-  fail "printer-helper confirm-no prints Nothing changed."
+  fail "printer-helper orphaned-default repair asks no y/N question (MB-004 violated)"
 fi
-if [[ ! -e "${BI_OPT}" ]]; then
-  pass "printer-helper confirm-no never calls lpoptions"
+if [[ -f "${PH_BI_HOME}/${PH_STATE_REL}" ]] \
+  && grep -q '^prev_default=Ghost-9400$' "${PH_BI_HOME}/${PH_STATE_REL}"; then
+  pass "printer-helper orphaned-default repair records the previous default first"
 else
-  fail "printer-helper confirm-no never calls lpoptions"
+  fail "printer-helper orphaned-default repair records the previous default first (got: $(cat "${PH_BI_HOME}/${PH_STATE_REL}" 2>/dev/null))"
 fi
-if [[ ! -e "${PH_BI_HOME}/${PH_STATE_REL}" ]]; then
-  pass "printer-helper confirm-no writes no state"
-else
-  fail "printer-helper confirm-no writes no state"
+bi_apply_calls="0"
+if [[ -f "${BI_OPT}" ]]; then
+  bi_apply_calls="$(grep -c '^lpoptions -d OfficeJet-5200$' "${BI_OPT}" || true)"
 fi
-if diff -r "${PH_BI_HOME}" "${PH_BI_HOME_BEFORE}" >/dev/null 2>&1; then
-  pass "printer-helper confirm-no writes nothing to the fake HOME"
+if [[ "${bi_apply_calls}" -eq 1 ]] && grep -q '^default=OfficeJet-5200$' "${PH_BI_STATE}"; then
+  pass "printer-helper orphaned-default repair applies lpoptions -d and leaves the healthy queue as default"
 else
-  fail "printer-helper confirm-no modified the fake HOME"
+  fail "printer-helper orphaned-default repair applies lpoptions -d and leaves the healthy queue as default (got ${bi_apply_calls})"
 fi
 
 PH_BI2_HOME="${TMPBASE}/ph-home-bi2"
@@ -4418,19 +4560,18 @@ PH_BI2_STDOUT="${TMPBASE}/ph-bi2.stdout"
 mkdir -p "${PH_BI2_HOME}"
 printf 'default=none\n' > "${PH_BI2_STATE}"
 code_bi2="0"
-printf 'y\n' | PATH="${PH_BIN_MAIN}" HOME="${PH_BI2_HOME}" XDG_STATE_HOME="" \
+PATH="${PH_BIN_MAIN}" HOME="${PH_BI2_HOME}" XDG_STATE_HOME="" \
   LPSTAT_STUB_STATE="${PH_BI2_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
   LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${TMPBASE}/ph-bi2-lpoptions.log" \
   LPOPTIONS_STUB_FAIL=1 \
-  bash "${PH_MODULE}" run > "${PH_BI2_STDOUT}" 2> "${PH_BI2_STDERR}" || code_bi2="$?"
+  bash "${PH_MODULE}" run < /dev/null > "${PH_BI2_STDOUT}" 2> "${PH_BI2_STDERR}" || code_bi2="$?"
 if [[ "${code_bi2}" -ne 0 ]]; then
   pass "printer-helper apply-failure exits non-zero (got ${code_bi2})"
 else
   fail "printer-helper apply-failure exits non-zero"
 fi
-# The ask_yn prompt shares the first stderr line with the stub refusal;
-# filter both to count the module's own lines.
-bi2_module_lines="$(grep -v 'Point the default printer at' "${PH_BI2_STDERR}" | grep -v 'lpoptions-stub:' | grep -c . || true)"
+# Filter the stub refusal line to count the module's own stderr lines.
+bi2_module_lines="$(grep -v 'lpoptions-stub:' "${PH_BI2_STDERR}" | grep -c . || true)"
 if [[ "${bi2_module_lines}" -eq 1 ]]; then
   pass "printer-helper apply-failure prints one plain stderr line"
 else
@@ -4998,9 +5139,9 @@ fi
 # HOME under mktemp. No stage ever invokes real findmnt, real mount, or real
 # sudo, and no stage ever remounts anything: the stub mount only flips the ro/rw
 # option token of a canned mount table, and the stub sudo runs its command
-# without privilege. Where the module's interactive confirmation matters, stages
-# drive the module binary directly with piped stdin (the menu path cannot script
-# elevated confirmation). The writability probe runs against a stand-in root via
+# without privilege. Under the menu-confirmation law (MODULE_SPEC §3, MB-004)
+# this module asks nothing itself, so stages drive the module binary directly
+# with stdin closed. The writability probe runs against a stand-in root via
 # the module's MINTBUTLER_MOUNT_PROBE_ROOT seam, because a harness cannot create
 # root-owned /media/... mount points; unset, the probe is `test -w "<target>"`.
 # ---------------------------------------------------------------------------
@@ -5193,8 +5334,8 @@ cp "${BK_STUB_ROOT}/findmnt" "${BK_STUB_ROOT}/mount" "${BK_BIN_MAIN}/"
 cp "${BK_STUB_ROOT}/sudo-pass" "${BK_BIN_MAIN}/sudo"
 
 # bk_stderr_lines FILE — the module's own stderr line count, with the stub
-# noise and the [y/N] prompt (which ask_yn writes without a newline, so a stub
-# error can share its line) filtered out.
+# noise filtered out (and any leftover [y/N] prompt prefix stripped, so a stub
+# error never shares a counted line).
 bk_stderr_lines() {
   local file="${1:-}"
   if [[ ! -f "${file}" ]]; then
@@ -5447,16 +5588,16 @@ if [[ -z "${bk_bm_fstab_lines}" ]]; then
 else
   fail "book-access-doctor mentions /etc/fstab only in informational display strings (got: ${bk_bm_fstab_lines})"
 fi
-if grep -F -q 'lib/elevate.sh' "${BK_MODULE}" && grep -F -q 'lib/ask.sh' "${BK_MODULE}"; then
-  pass "book-access-doctor reaches privilege only through lib/elevate.sh and asks through lib/ask.sh"
+if grep -F -q 'lib/elevate.sh' "${BK_MODULE}" && ! grep -F -q 'lib/ask.sh' "${BK_MODULE}"; then
+  pass "book-access-doctor reaches privilege only through lib/elevate.sh and sources no ask helper (asks: 0)"
 else
-  fail "book-access-doctor reaches privilege only through lib/elevate.sh and asks through lib/ask.sh"
+  fail "book-access-doctor reaches privilege only through lib/elevate.sh and sources no ask helper"
 fi
 bk_bm_ask_count="$(grep -c -E '^[^#]*ask_(yn|value) ' "${BK_MODULE}" || true)"
-if [[ "${bk_bm_ask_count}" -eq 1 ]]; then
-  pass "book-access-doctor asks exactly one question (manifest asks: 1)"
+if [[ "${bk_bm_ask_count}" -eq 0 ]] && grep -q '^asks: 0$' "${REPO_ROOT}/modules/book-access-doctor/module.yml"; then
+  pass "book-access-doctor asks no question at all (manifest asks: 0; the menu takes the single confirmation)"
 else
-  fail "book-access-doctor asks exactly one question (got ${bk_bm_ask_count})"
+  fail "book-access-doctor asks no question at all (got ${bk_bm_ask_count})"
 fi
 
 # Stage (bn): no removable mount at all — the canned table holds only the
@@ -5591,15 +5732,15 @@ else
   fail "book-access-doctor healthy path modified the fake HOME"
 fi
 
-# Stage (bp): the one repair, confirmed yes, then undo. The canned table holds
-# one read-only vfat row (plus a healthy one, so the mixed case is exercised:
-# the repair applies to the first read-only mount only). Scripted stdin `y`
-# accepts the single confirmation. The stub log must hold EXACTLY one elevated
-# remount — with the target unquoted, because lib/elevate.sh splits the command
-# string into words itself and never runs a shell, so shell quotes would reach
-# mount as literal characters; the human-facing display is the quoted form and
-# stage (bm) asserts it.
-printf 'Stage bp: book-access-doctor read-only repair (confirm yes) and undo\n'
+# Stage (bp): the one repair with stdin CLOSED, then undo. The canned table
+# holds one read-only vfat row (plus a healthy one, so the mixed case is
+# exercised: the repair applies to the first read-only mount only). The menu
+# took the single confirmation for this run, so the module asks nothing
+# (MODULE_SPEC §3, MB-004). The stub log must hold EXACTLY one elevated
+# remount, and the target travels as ONE argv word from the module to sudo
+# (MB-001); the human-facing display is DERIVED from that same argv list —
+# a whitespace-free target appears bare in it.
+printf 'Stage bp: book-access-doctor read-only repair with stdin closed (menu-confirmation law), and undo\n'
 BK_BP_HOME="${TMPBASE}/bk-home-bp"
 BK_BP_TABLE="${TMPBASE}/bk-table-bp.txt"
 BK_BP_PROBE="${TMPBASE}/bk-probe-bp"
@@ -5611,25 +5752,31 @@ BK_BP_ELEV_LOG="${TMPBASE}/bk-bp-elevated.log"
 mkdir -p "${BK_BP_HOME}" "${BK_BP_PROBE}/media/user/KOBO"
 printf '%s\n' "${BK_ROW_RO_VFAT}" "${BK_ROW_RW_VFAT}" > "${BK_BP_TABLE}"
 code_bp="0"
-printf 'y\n' | PATH="${BK_BIN_MAIN}" HOME="${BK_BP_HOME}" XDG_STATE_HOME="" \
+PATH="${BK_BIN_MAIN}" HOME="${BK_BP_HOME}" XDG_STATE_HOME="" \
   MOUNT_STUB_TABLE="${BK_BP_TABLE}" MINTBUTLER_MOUNT_PROBE_ROOT="${BK_BP_PROBE}" \
   FINDMNT_STUB_LOG="${BK_BP_FINDMNT_LOG}" MOUNT_STUB_LOG="${BK_BP_MOUNT_LOG}" \
   ELEVATED_STUB_LOG="${BK_BP_ELEV_LOG}" \
-  bash "${BK_MODULE}" run >"${BK_BP_STDOUT}" 2>"${BK_BP_STDERR}" || code_bp="$?"
+  bash "${BK_MODULE}" run < /dev/null >"${BK_BP_STDOUT}" 2>"${BK_BP_STDERR}" || code_bp="$?"
 if [[ "${code_bp}" -eq 0 ]]; then
-  pass "book-access-doctor confirmed remount exits 0"
+  pass "book-access-doctor repair with stdin closed exits 0"
 else
-  fail "book-access-doctor confirmed remount exits 0 (got ${code_bp})"
+  fail "book-access-doctor repair with stdin closed exits 0 (got ${code_bp})"
+fi
+bk_bp_ask_lines="$(cat "${BK_BP_STDOUT}" "${BK_BP_STDERR}" | grep -c '\[y/N\]' || true)"
+if [[ "${bk_bp_ask_lines}" -eq 0 ]]; then
+  pass "book-access-doctor asks no y/N question once launched (the menu confirms; MB-004)"
+else
+  fail "book-access-doctor asks no y/N question once launched (MB-004 violated)"
 fi
 if grep -Fq "current:" "${BK_BP_STDOUT}" && grep -Fq "proposed:" "${BK_BP_STDOUT}"; then
-  pass "book-access-doctor repair offer shows current-versus-proposed before confirming"
+  pass "book-access-doctor repair shows current-versus-proposed before remounting"
 else
-  fail "book-access-doctor repair offer shows current-versus-proposed before confirming"
+  fail "book-access-doctor repair shows current-versus-proposed before remounting"
 fi
-if grep -Fq "mount -o remount,rw '${BK_TARGET_RO}'" "${BK_BP_STDOUT}"; then
-  pass "book-access-doctor repair offer shows the elevated command via the helper display"
+if grep -Fq "sudo mount -o remount,rw ${BK_TARGET_RO}" "${BK_BP_STDOUT}"; then
+  pass "book-access-doctor repair offer shows the elevated command via the derived helper display"
 else
-  fail "book-access-doctor repair offer shows the elevated command via the helper display"
+  fail "book-access-doctor repair offer shows the elevated command via the derived helper display"
 fi
 if grep -Fq "the first read-only mount only" "${BK_BP_STDOUT}" \
   && grep -Fq "/media/user/KOBO" "${BK_BP_STDOUT}"; then
@@ -5752,68 +5899,50 @@ else
   fail "book-access-doctor second undo makes no elevated call (got: $(cat "${BK_BP_UNDO2_ELEV_LOG}"))"
 fi
 
-# Stage (bq): confirm-no on the same read-only fixture, and a read-only medium
-# whose filesystem type a remount cannot help. Both exit 0 with no mount call,
-# no elevated call and nothing written; the iso9660 case asks no question at
-# all (its verdict is delivered before any confirmation would be offered).
-printf 'Stage bq: book-access-doctor confirm-no and non-remountable filesystem\n'
+# Stage (bq): EOF on stdin must NOT stop the repair — there is no in-module
+# confirmation to abort anymore (MB-004), and a modulelint sandbox run with
+# stdin /dev/null on a machine that really has a read-only mount completes
+# the remount. Then a read-only medium whose filesystem type a remount
+# cannot help.
+printf 'Stage bq: book-access-doctor EOF-stdin repair (menu-confirmation law) and non-remountable filesystem\n'
 BK_BQ_HOME="${TMPBASE}/bk-home-bq"
-BK_BQ_HOME_BEFORE="${TMPBASE}/bk-home-bq-before"
 BK_BQ_TABLE="${TMPBASE}/bk-table-bq.txt"
 BK_BQ_STDOUT="${TMPBASE}/bk-bq.stdout"
 BK_BQ_STDERR="${TMPBASE}/bk-bq.stderr"
 BK_BQ_MOUNT_LOG="${TMPBASE}/bk-bq-mount.log"
 BK_BQ_ELEV_LOG="${TMPBASE}/bk-bq-elevated.log"
 mkdir -p "${BK_BQ_HOME}"
-cp -a "${BK_BQ_HOME}" "${BK_BQ_HOME_BEFORE}"
 printf '%s\n' "${BK_ROW_RO_VFAT}" > "${BK_BQ_TABLE}"
 code_bq="0"
-printf 'n\n' | PATH="${BK_BIN_MAIN}" HOME="${BK_BQ_HOME}" XDG_STATE_HOME="" \
+PATH="${BK_BIN_MAIN}" HOME="${BK_BQ_HOME}" XDG_STATE_HOME="" \
   MOUNT_STUB_TABLE="${BK_BQ_TABLE}" MOUNT_STUB_LOG="${BK_BQ_MOUNT_LOG}" \
   ELEVATED_STUB_LOG="${BK_BQ_ELEV_LOG}" \
-  bash "${BK_MODULE}" run >"${BK_BQ_STDOUT}" 2>"${BK_BQ_STDERR}" || code_bq="$?"
+  bash "${BK_MODULE}" run < /dev/null >"${BK_BQ_STDOUT}" 2>"${BK_BQ_STDERR}" || code_bq="$?"
 if [[ "${code_bq}" -eq 0 ]]; then
-  pass "book-access-doctor confirm-no exits 0"
+  pass "book-access-doctor EOF-stdin repair exits 0 (nothing to abort)"
 else
-  fail "book-access-doctor confirm-no exits 0 (got ${code_bq})"
+  fail "book-access-doctor EOF-stdin repair exits 0 (got ${code_bq})"
 fi
-if grep -Fxq "Nothing changed." "${BK_BQ_STDOUT}"; then
-  pass "book-access-doctor confirm-no reports Nothing changed"
+if ! cat "${BK_BQ_STDOUT}" "${BK_BQ_STDERR}" | grep -q '\[y/N\]'; then
+  pass "book-access-doctor EOF-stdin repair asks no y/N question (MB-004)"
 else
-  fail "book-access-doctor confirm-no reports Nothing changed"
+  fail "book-access-doctor EOF-stdin repair asks no y/N question (MB-004 violated)"
 fi
-if [[ ! -s "${BK_BQ_MOUNT_LOG}" ]] && [[ ! -s "${BK_BQ_ELEV_LOG}" ]]; then
-  pass "book-access-doctor confirm-no makes no mount or elevated call"
+if [[ -f "${BK_BQ_HOME}/${BK_STATE_REL}" ]] \
+  && grep -Fxq "target=${BK_TARGET_RO}" "${BK_BQ_HOME}/${BK_STATE_REL}"; then
+  pass "book-access-doctor EOF-stdin repair records the target before remounting"
 else
-  fail "book-access-doctor confirm-no makes no mount or elevated call"
+  fail "book-access-doctor EOF-stdin repair records the target before remounting"
 fi
-if [[ ! -e "${BK_BQ_HOME}/${BK_STATE_REL}" ]]; then
-  pass "book-access-doctor confirm-no writes no state record"
+if [[ -f "${BK_BQ_ELEV_LOG}" ]] && cmp -s "${BK_BQ_ELEV_LOG}" <(printf 'sudo mount -o remount,rw %s\n' "${BK_TARGET_RO}"); then
+  pass "book-access-doctor EOF-stdin repair runs exactly one elevated remount read-write"
 else
-  fail "book-access-doctor confirm-no writes no state record"
+  fail "book-access-doctor EOF-stdin repair runs exactly one elevated remount read-write (got: $(cat "${BK_BQ_ELEV_LOG}" 2>/dev/null))"
 fi
-if diff -r "${BK_BQ_HOME}" "${BK_BQ_HOME_BEFORE}" >/dev/null 2>&1; then
-  pass "book-access-doctor confirm-no writes nothing to the fake HOME (byte-identical)"
+if grep -Fq "/media/user/KINDLE|/dev/sdb1|vfat|rw," "${BK_BQ_TABLE}"; then
+  pass "book-access-doctor EOF-stdin repair leaves the canned table read-write"
 else
-  fail "book-access-doctor confirm-no modified the fake HOME"
-fi
-if grep -Fq "${BK_ROW_RO_VFAT}" "${BK_BQ_TABLE}"; then
-  pass "book-access-doctor confirm-no leaves the canned table read-only"
-else
-  fail "book-access-doctor confirm-no leaves the canned table read-only"
-fi
-
-# EOF on stdin is a NO too (lib/ask.sh), which is what a modulelint sandbox run
-# with stdin /dev/null hits on a machine that really has a read-only mount.
-BK_BQ2_STDOUT="${TMPBASE}/bk-bq2.stdout"
-code_bq2="0"
-PATH="${BK_BIN_MAIN}" HOME="${BK_BQ_HOME}" XDG_STATE_HOME="" \
-  MOUNT_STUB_TABLE="${BK_BQ_TABLE}" ELEVATED_STUB_LOG="${TMPBASE}/bk-bq2-elevated.log" \
-  bash "${BK_MODULE}" run < /dev/null >"${BK_BQ2_STDOUT}" 2>/dev/null || code_bq2="$?"
-if [[ "${code_bq2}" -eq 0 ]] && grep -Fxq "Nothing changed." "${BK_BQ2_STDOUT}"; then
-  pass "book-access-doctor treats EOF on the confirmation as NO (Nothing changed, exit 0)"
-else
-  fail "book-access-doctor treats EOF on the confirmation as NO (got ${code_bq2})"
+  fail "book-access-doctor EOF-stdin repair leaves the canned table read-write (got: $(cat "${BK_BQ_TABLE}"))"
 fi
 
 # Non-remountable filesystem: a read-only iso9660 row earns the honest
@@ -5859,10 +5988,10 @@ else
   fail "book-access-doctor iso9660 path modified the fake HOME"
 fi
 
-# Stage (br): remount failure. The stub mount refuses, so the confirmed repair
-# fails: exit 1, one plain module stderr line naming the kept record, nothing
-# claimed on stdout, the canned table still read-only. The same fixture then
-# exercises the two honest refusals of undo (a failing elevated step, and
+# Stage (br): remount failure, stdin closed. The stub mount refuses, so the
+# repair fails: exit 1, one plain module stderr line naming the kept record,
+# nothing claimed on stdout, the canned table still read-only. The same fixture
+# then exercises the two honest refusals of undo (a failing elevated step, and
 # missing tools) — in both cases the record is kept so a later undo can still
 # restore the pre-repair read-only state.
 printf 'Stage br: book-access-doctor remount failure and undo refusals\n'
@@ -5874,10 +6003,10 @@ BK_BR_ELEV_LOG="${TMPBASE}/bk-br-elevated.log"
 mkdir -p "${BK_BR_HOME}"
 printf '%s\n' "${BK_ROW_RO_VFAT}" > "${BK_BR_TABLE}"
 code_br="0"
-printf 'y\n' | PATH="${BK_BIN_MAIN}" HOME="${BK_BR_HOME}" XDG_STATE_HOME="" \
+PATH="${BK_BIN_MAIN}" HOME="${BK_BR_HOME}" XDG_STATE_HOME="" \
   MOUNT_STUB_TABLE="${BK_BR_TABLE}" MOUNT_STUB_FAIL=1 \
   ELEVATED_STUB_LOG="${BK_BR_ELEV_LOG}" \
-  bash "${BK_MODULE}" run >"${BK_BR_STDOUT}" 2>"${BK_BR_STDERR}" || code_br="$?"
+  bash "${BK_MODULE}" run < /dev/null >"${BK_BR_STDOUT}" 2>"${BK_BR_STDERR}" || code_br="$?"
 if [[ "${code_br}" -eq 1 ]]; then
   pass "book-access-doctor failed remount exits 1"
 else
@@ -5955,6 +6084,671 @@ else
   fail "book-access-doctor undo without the mount tools deleted the state record"
 fi
 
+
+# ---------------------------------------------------------------------------
+# Stage (bs): needs: enforcement (MODULE_SPEC §2, MB-003/MB-005). A module
+# whose declared needs are absent never launches: the menu prints one plain
+# refusal line and exits 1, --scan reports a non-fatal WARN naming the slug,
+# and dry-run stays allowed. Proven with tests/fixtures/modules/needs-fixture,
+# whose need is unsatisfiable by construction — deterministic and offline.
+# ---------------------------------------------------------------------------
+printf 'Stage bs: needs enforcement (fixture with unsatisfiable need)\n'
+
+BS_STAGE="${TMPBASE}/bs-stage"
+mkdir -p "${BS_STAGE}"
+cp -a "${REPO_ROOT}/butler" "${BS_STAGE}/"
+cp -a "${REPO_ROOT}/lib" "${BS_STAGE}/"
+cp -a "${REPO_ROOT}/bin" "${BS_STAGE}/"
+mkdir -p "${BS_STAGE}/modules"
+cp -a "${REPO_ROOT}/tests/fixtures/modules/." "${BS_STAGE}/modules/"
+chmod +x "${BS_STAGE}/butler" "${BS_STAGE}/bin/modulelint"
+
+output_bs_lint1=""
+code_bs_lint1="0"
+output_bs_lint1="$(cd "${BS_STAGE}" && bin/modulelint needs-fixture 2>&1)" || code_bs_lint1="$?"
+if [[ "${code_bs_lint1}" -eq 0 ]] \
+  && printf '%s\n' "${output_bs_lint1}" | grep -Fxq "WARN needs-fixture: missing need: mb-test-need-does-not-exist" \
+  && printf '%s\n' "${output_bs_lint1}" | grep -q "PASS needs-fixture"; then
+  pass "modulelint warns about the missing need and still passes the honest module"
+else
+  fail "modulelint warns about the missing need and still passes the honest module (got ${code_bs_lint1}: ${output_bs_lint1})"
+fi
+
+output_bs_scan=""
+code_bs_scan="0"
+output_bs_scan="$(cd "${BS_STAGE}" && ./butler --scan 2>&1)" || code_bs_scan="$?"
+if [[ "${code_bs_scan}" -eq 1 ]] \
+  && printf '%s\n' "${output_bs_scan}" | grep -Fxq "WARN needs-fixture: missing need: mb-test-need-does-not-exist" \
+  && printf '%s\n' "${output_bs_scan}" | grep -q "PASS needs-fixture"; then
+  pass "--scan reports the needs WARN with the module slug (and the module passes)"
+else
+  fail "--scan reports the needs WARN with the module slug (got ${code_bs_scan}: ${output_bs_scan})"
+fi
+
+output_bs_run=""
+code_bs_run="0"
+output_bs_run="$(cd "${BS_STAGE}" && ./butler --run needs-fixture 2>&1)" || code_bs_run="$?"
+bs_run_lines="$(printf '%s\n' "${output_bs_run}" | grep -c . || true)"
+if [[ "${code_bs_run}" -eq 1 && "${bs_run_lines}" -eq 1 ]] \
+  && printf '%s\n' "${output_bs_run}" | grep -Fxq "needs-fixture: not ready — missing need: mb-test-need-does-not-exist"; then
+  pass "the menu refuses to launch a module with an unsatisfiable need — one plain line, exit 1"
+else
+  fail "the menu refuses to launch a module with an unsatisfiable need (got ${code_bs_run}/${bs_run_lines}: ${output_bs_run})"
+fi
+
+output_bs_dry=""
+code_bs_dry="0"
+output_bs_dry="$(cd "${BS_STAGE}" && ./butler --run needs-fixture --dry-run 2>&1)" || code_bs_dry="$?"
+if [[ "${code_bs_dry}" -eq 0 ]] \
+  && printf '%s\n' "${output_bs_dry}" | grep -q "Plan for needs-fixture" \
+  && printf '%s\n' "${output_bs_dry}" | grep -q "Commands: none"; then
+  pass "dry-run stays allowed while the need is missing (nothing is launched)"
+else
+  fail "dry-run stays allowed while the need is missing (got ${code_bs_dry}: ${output_bs_dry})"
+fi
+
+output_bs_menu=""
+code_bs_menu="0"
+output_bs_menu="$(printf '/needs\n1\nr\nb\nq\n' | (cd "${BS_STAGE}" && ./butler) 2>&1)" || code_bs_menu="$?"
+bs_menu_yn="$(printf '%s\n' "${output_bs_menu}" | grep -c '\[y/N\]' || true)"
+if [[ "${code_bs_menu}" -eq 0 ]] \
+  && printf '%s\n' "${output_bs_menu}" | grep -Fq "needs-fixture: not ready — missing need: mb-test-need-does-not-exist" \
+  && [[ "${bs_menu_yn}" -eq 0 ]]; then
+  pass "the interactive menu prints the one plain refusal line and never reaches a confirmation"
+else
+  fail "the interactive menu prints the one plain refusal line and never reaches a confirmation (got ${code_bs_menu})"
+fi
+
+# ---------------------------------------------------------------------------
+# Stage (bt): the 23-line law over EVERY rendered screen of every real module
+# (MODULE_SPEC §4, MB-003). For each module the menu is driven to the detail
+# screen, r is pressed, and whatever confirmation family appears is declined
+# ('n' answers [y/N] with a decline and is never the typed slug). Every
+# screen between prompt anchors must fit 23 terminal lines. Modules with a
+# missing need render the one-line refusal screen — same bound. plan and
+# dry-run output is independently bounded by modulelint's strict check.
+# ---------------------------------------------------------------------------
+printf 'Stage bt: 23-line law across every module screen\n'
+
+BT_AWK='
+BEGIN { plen = length(prompt) }
+{
+  if (buf == "") buf = $0; else buf = buf "\n" $0
+  idx = index(buf, prompt)
+  while (idx > 0) {
+    screen = substr(buf, 1, idx - 1)
+    buf = substr(buf, idx + plen)
+    print "===SCREEN_START==="
+    print screen
+    print "===SCREEN_END==="
+    idx = index(buf, prompt)
+  }
+}
+'
+
+# bt_check_module_screens SLUG — pass/fail one module's whole screen flow.
+bt_check_module_screens() {
+  local slug="${1:-}"
+  local raw="" normalized=""
+  raw="$(printf '/%s\n1\nr\nn\nb\nq\n' "${slug}" | (cd "${REPO_ROOT}" && ./butler) 2>&1)" || {
+    fail "menu drive-through for ${slug} completes (23-line law sweep)"
+    return 0
+  }
+  normalized="$(printf '%s' "${raw}" | sed \
+    -e 's|Select a task number (or: n next  p prev  /search  r refresh  q quit): |@@P@@|g' \
+    -e 's|Choose an action: |@@P@@|g' \
+    -e "s|Type the module slug '[^']*' to confirm: |@@P@@|g" \
+    -e 's|\[y/N\]: |@@P@@|g')"
+  local max_lines=0 screens=0 line_cnt=""
+  local current_screen="" in_screen=0 rline=""
+  while IFS= read -r rline; do
+    if [[ "${rline}" == "===SCREEN_START===" ]]; then
+      in_screen=1
+      current_screen=""
+      continue
+    fi
+    if [[ "${rline}" == "===SCREEN_END===" ]]; then
+      in_screen=0
+      screens=$(( screens + 1 ))
+      if [[ -z "${current_screen}" ]]; then
+        line_cnt=0
+      else
+        line_cnt="$(printf '%s\n' "${current_screen}" | wc -l)"
+      fi
+      if (( line_cnt > max_lines )); then
+        max_lines=${line_cnt}
+      fi
+      continue
+    fi
+    if [[ "${in_screen}" -eq 1 ]]; then
+      if [[ -z "${current_screen}" ]]; then
+        current_screen="${rline}"
+      else
+        current_screen="${current_screen}"$'\n'"${rline}"
+      fi
+    fi
+  done < <(awk -v prompt='@@P@@' "${BT_AWK}" <<< "${normalized}")
+  if (( screens >= 3 && max_lines <= 23 )); then
+    pass "23-line law holds across ${slug} menu screens (max ${max_lines} over ${screens} screens)"
+  else
+    fail "23-line law holds across ${slug} menu screens (max ${max_lines} over ${screens} screens)"
+  fi
+}
+
+for bt_slug in appimage-installer audio-repair book-access-doctor default-apps-editor \
+  desktop-shortcut-creator multimedia-codecs printer-helper screenshot-studio \
+  system-report-pack timeshift-guardian; do
+  bt_check_module_screens "${bt_slug}"
+done
+
+# ---------------------------------------------------------------------------
+# Stage (bu): lib/elevate.sh argv unit tests (MB-001). The displayed line is
+# DERIVED from the argv list (safe words bare, everything else single-quoted
+# with the '\'' escape); an eval round-trip of the display reads back the very
+# same argv list word-for-word, including the empty word; elevate_run hands
+# sudo exactly the caller's argv; zero-argument calls refuse (1 for display,
+# 126 for run); and a low-risk manifest still refuses (126) with no sudo call.
+# ---------------------------------------------------------------------------
+printf 'Stage bu: lib/elevate.sh argv unit tests (MB-001)\n'
+
+BU_DIR="${TMPBASE}/bu"
+BU_BIN="${BU_DIR}/bin"
+mkdir -p "${BU_BIN}"
+for bu_tool in bash dirname sed; do
+  bu_tool_path="$(command -v "${bu_tool}" || true)"
+  if [[ -n "${bu_tool_path}" ]]; then
+    ln -sf "${bu_tool_path}" "${BU_BIN}/${bu_tool}"
+  fi
+done
+
+# Recording passthrough sudo (same contract as every module stage): flat line
+# to ELEVATED_STUB_LOG, exact argv (one word per line, '==' between calls) to
+# MB_ARGV_SUDO_LOG, then run unprivileged. Plus an argv-logging timeshift.
+cat <<'BU_SUDO_STUB' > "${BU_BIN}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${ELEVATED_STUB_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  printf 'sudo%s\n' "${*:+ $*}" >> "${LOG}"
+fi
+ARGVLOG="${MB_ARGV_SUDO_LOG:-}"
+if [[ -n "${ARGVLOG}" && "$#" -gt 0 ]]; then
+  printf '%s\n' "$@" >> "${ARGVLOG}"
+  printf '==\n' >> "${ARGVLOG}"
+fi
+exec "$@"
+BU_SUDO_STUB
+cat <<'BU_TS_STUB' > "${BU_BIN}/timeshift"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${MB_ARGV_TS_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  bts_n=0
+  for bts_word in "$@"; do
+    bts_n=$((bts_n + 1))
+    printf 'arg%d=%s\n' "${bts_n}" "${bts_word}" >> "${LOG}"
+  done
+  printf '==\n' >> "${LOG}"
+fi
+exit 0
+BU_TS_STUB
+# eval round-trip prover: its argv is the expected list; it must rebuild the
+# very same list from the derived display line and print that line.
+cat <<'BU_ROUNDTRIP' > "${BU_DIR}/roundtrip.sh"
+#!/usr/bin/env bash
+set -euo pipefail
+source "${MB_LIB:?}/elevate.sh"
+disp="$(elevate_command_line "$@")"
+line="${disp#sudo }"
+parsed=()
+eval "parsed=(${line})"
+if [[ "${#parsed[@]}" -ne "$#" ]]; then
+  printf 'roundtrip: list length changed (%s -> %s)\n' "$#" "${#parsed[@]}" >&2
+  exit 3
+fi
+idx=0
+for word in "$@"; do
+  if [[ "${parsed[idx]}" != "${word}" ]]; then
+    printf 'roundtrip: word %d changed (expected <%s>, got <%s>)\n' "${idx}" "${word}" "${parsed[idx]}" >&2
+    exit 4
+  fi
+  idx=$((idx + 1))
+done
+printf '%s\n' "${disp}"
+BU_ROUNDTRIP
+chmod +x "${BU_BIN}/sudo" "${BU_BIN}/timeshift" "${BU_DIR}/roundtrip.sh"
+
+BU_LIB_ENV=(PATH="${BU_BIN}" MINTBUTLER_LIB_DIR="${REPO_ROOT}/lib")
+
+bu_disp="$(env "${BU_LIB_ENV[@]}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line apt-get install -y flameshot')"
+if [[ "${bu_disp}" == "sudo apt-get install -y flameshot" ]]; then
+  pass "elevate display: a safe list renders flat and unquoted"
+else
+  fail "elevate display: a safe list renders flat and unquoted (got: ${bu_disp})"
+fi
+
+bu_disp="$(env "${BU_LIB_ENV[@]}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line mount -o remount,rw "<target>"')"
+if [[ "${bu_disp}" == "sudo mount -o remount,rw '<target>'" ]]; then
+  pass "elevate display: a placeholder word is single-quoted in the derived line"
+else
+  fail "elevate display: a placeholder word is single-quoted in the derived line (got: ${bu_disp})"
+fi
+
+BU_HOSTILE="it's \$HOME; reboot"
+bu_disp="$(env "${BU_LIB_ENV[@]}" BU_WORD="${BU_HOSTILE}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line timeshift --create --comments "${BU_WORD}"')"
+bu_expected="sudo timeshift --create --comments 'it'\\''s \$HOME; reboot'"
+if [[ "${bu_disp}" == "${bu_expected}" ]]; then
+  pass "elevate display: a hostile word (spaces, quotes, \$, ;) derives the escaped display a human would type"
+else
+  fail "elevate display: hostile word derivation (expected <${bu_expected}>, got <${bu_disp}>)"
+fi
+
+bu_disp="$(env "${BU_LIB_ENV[@]}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line printf "" x')"
+if [[ "${bu_disp}" == "sudo printf '' x" ]]; then
+  pass "elevate display: the empty word renders as ''"
+else
+  fail "elevate display: the empty word renders as '' (got: ${bu_disp})"
+fi
+
+bu_rt_out=""
+bu_rt_code="0"
+bu_rt_out="$(MB_LIB="${REPO_ROOT}/lib" bash "${BU_DIR}/roundtrip.sh" \
+  "a b" "it's" 'say "hi; there"' "" "/plain/path-1" "x=y,%z:w@q" 2>&1)" || bu_rt_code="$?"
+bu_rt_expected="sudo 'a b' 'it'\''s' 'say \"hi; there\"' '' /plain/path-1 x=y,%z:w@q"
+if [[ "${bu_rt_code}" -eq 0 && "${bu_rt_out}" == "${bu_rt_expected}" ]]; then
+  pass "elevate display: eval round-trip reads the derived line back as the same argv list word-for-word"
+else
+  fail "elevate display: eval round-trip (code ${bu_rt_code}, expected <${bu_rt_expected}>, got <${bu_rt_out}>)"
+fi
+
+bu_out=""
+bu_code="0"
+bu_out="$(env "${BU_LIB_ENV[@]}" bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line' 2>&1)" || bu_code="$?"
+if [[ "${bu_code}" -eq 1 && "${bu_out}" == "elevate: no command to show (empty command list)" ]]; then
+  pass "elevate_command_line with zero arguments refuses with exit 1 and the plain reason"
+else
+  fail "elevate_command_line with zero arguments refuses (code ${bu_code}, got: ${bu_out})"
+fi
+
+bu_out=""
+bu_code="0"
+bu_out="$(env "${BU_LIB_ENV[@]}" MINTBUTLER_MODULE_SLUG=book-access-doctor \
+  bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_run' 2>&1)" || bu_code="$?"
+if [[ "${bu_code}" -eq 126 && "${bu_out}" == "elevate: refusing to run an empty elevated command" ]]; then
+  pass "elevate_run with zero arguments refuses with exit 126 and the plain reason"
+else
+  fail "elevate_run with zero arguments refuses (code ${bu_code}, got: ${bu_out})"
+fi
+
+BU_LOW_ARGV="${TMPBASE}/bu-low-argv.log"
+rm -f "${BU_LOW_ARGV}"
+bu_out=""
+bu_code="0"
+bu_out="$(env "${BU_LIB_ENV[@]}" MINTBUTLER_MODULE_SLUG=printer-helper MB_ARGV_SUDO_LOG="${BU_LOW_ARGV}" \
+  bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_run id' 2>&1)" || bu_code="$?"
+if [[ "${bu_code}" -eq 126 && "${bu_out}" == *"risk: low"* && ! -e "${BU_LOW_ARGV}" ]]; then
+  pass "elevate_run under a low-risk manifest refuses with 126 and never calls sudo"
+else
+  fail "elevate_run under a low-risk manifest refuses with 126 and never calls sudo (code ${bu_code}, got: ${bu_out})"
+fi
+
+BU_EXEC_ARGV="${TMPBASE}/bu-exec-argv.log"
+BU_EXEC_TS="${TMPBASE}/bu-exec-ts.log"
+rm -f "${BU_EXEC_ARGV}" "${BU_EXEC_TS}"
+bu_out=""
+bu_code="0"
+bu_out="$(env "${BU_LIB_ENV[@]}" MINTBUTLER_MODULE_SLUG=book-access-doctor \
+  MB_ARGV_SUDO_LOG="${BU_EXEC_ARGV}" MB_ARGV_TS_LOG="${BU_EXEC_TS}" BU_WORD="${BU_HOSTILE}" \
+  bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_run timeshift --create --comments "${BU_WORD}"' 2>&1)" || bu_code="$?"
+{
+  printf 'timeshift\n--create\n--comments\n%s\n==\n' "${BU_HOSTILE}"
+} > "${BU_EXEC_ARGV}.expected"
+if [[ "${bu_code}" -eq 0 && -f "${BU_EXEC_ARGV}" ]] \
+  && cmp -s "${BU_EXEC_ARGV}" "${BU_EXEC_ARGV}.expected"; then
+  pass "elevate_run hands sudo exactly the caller's argv (a hostile comment is ONE word)"
+else
+  fail "elevate_run hands sudo exactly the caller's argv (code ${bu_code}, got: $(cat "${BU_EXEC_ARGV}" 2>/dev/null))"
+fi
+if [[ -f "${BU_EXEC_TS}" ]] && grep -Fxq "arg3=${BU_HOSTILE}" "${BU_EXEC_TS}" \
+  && ! grep -q '^arg4=' "${BU_EXEC_TS}"; then
+  pass "elevate_run exec: the hostile comment arrives at the command as exactly one argument"
+else
+  fail "elevate_run exec: the hostile comment arrives at the command as exactly one argument (got: $(cat "${BU_EXEC_TS}" 2>/dev/null))"
+fi
+if printf '%s\n' "${bu_out}" | grep -Fxq "Running elevated command: ${bu_expected}"; then
+  pass "elevate_run prints the derived display line of exactly the argv it runs"
+else
+  fail "elevate_run prints the derived display line of exactly the argv it runs (got: ${bu_out})"
+fi
+
+# ---------------------------------------------------------------------------
+# Stage (bv): hostile-input end-to-end through the modules (MB-001). The
+# snapshot comment / mount target strings below contain spaces, single and
+# double quotes, '$', and ';'. Each must reach the stubbed command as EXACTLY
+# one argv word — and the displayed line must be the safely-quoted form a
+# human would type.
+# ---------------------------------------------------------------------------
+printf 'Stage bv: hostile-input end-to-end through the modules (MB-001)\n'
+
+BV_TG_BIN="${TMPBASE}/bv-bin-tg"
+tg_make_bin "${BV_TG_BIN}" >/dev/null
+cp "${TG_AN_BIN}/sudo" "${BV_TG_BIN}/sudo"
+cat <<'BV_TS_STUB' > "${BV_TG_BIN}/timeshift"
+#!/usr/bin/env bash
+set -euo pipefail
+LOG="${MB_ARGV_TS_LOG:-}"
+if [[ -n "${LOG}" ]]; then
+  bts_n=0
+  for bts_word in "$@"; do
+    bts_n=$((bts_n + 1))
+    printf 'arg%d=%s\n' "${bts_n}" "${bts_word}" >> "${LOG}"
+  done
+  printf '==\n' >> "${LOG}"
+fi
+if [[ "${1:-}" == "--list" ]]; then
+  echo "Mounted at : /run/timeshift/backup"
+  echo "Device     : /dev/sda1"
+  echo "Mode       : RSYNC"
+  echo "Device is OK"
+  echo "------------------------------------------------------------------------------"
+  echo "Num     Name                 Tags  Description"
+  echo "------------------------------------------------------------------------------"
+  echo "0    >  2026-09-16_12-00-00  O D   Initial"
+  exit 0
+fi
+exit 0
+BV_TS_STUB
+chmod +x "${BV_TG_BIN}/timeshift"
+
+# bv_tg_case COMMENT PROOF_SLUG — one full timeshift-guardian run whose
+# comment is COMMENT; asserts exit 0, the exact derived display line, and an
+# argv-exact recording at both the sudo and the timeshift stubs.
+bv_tg_case() {
+  local comment="${1:-}"
+  local slug="${2:-}"
+  local argv_log="${TMPBASE}/bv-${slug}-argv.log"
+  local ts_log="${TMPBASE}/bv-${slug}-ts.log"
+  local out=""
+  local code="0"
+  rm -f "${argv_log}" "${ts_log}"
+  out="$(MB_ARGV_SUDO_LOG="${argv_log}" MB_ARGV_TS_LOG="${ts_log}" \
+    PATH="${BV_TG_BIN}" bash "${TG_MODULE}" run <<< "${comment}" 2>&1)" || code="$?"
+  if [[ "${code}" -eq 0 ]]; then
+    pass "hostile comment (${slug}) run exits 0"
+  else
+    fail "hostile comment (${slug}) run exits 0 (got ${code})"
+  fi
+  local expected_line=""
+  expected_line="$(env PATH="${BU_BIN}" MINTBUTLER_LIB_DIR="${REPO_ROOT}/lib" BV_WORD="${comment}" \
+    bash -c 'source "${MINTBUTLER_LIB_DIR}/elevate.sh"; elevate_command_line timeshift --create --comments "${BV_WORD}"')"
+  if printf '%s\n' "${out}" | grep -Fxq "Creating the snapshot with: ${expected_line}"; then
+    pass "hostile comment (${slug}) shows the derived single-quoted display"
+  else
+    fail "hostile comment (${slug}) shows the derived single-quoted display (expected <${expected_line}>)"
+  fi
+  {
+    printf 'timeshift\n--list\n==\n'
+    printf 'timeshift\n--create\n--comments\n%s\n==\n' "${comment}"
+    printf 'timeshift\n--list\n==\n'
+  } > "${argv_log}.expected"
+  if [[ -f "${argv_log}" ]] && cmp -s "${argv_log}" "${argv_log}.expected"; then
+    pass "hostile comment (${slug}) reaches sudo as exactly three argv calls with the comment as ONE word"
+  else
+    fail "hostile comment (${slug}) argv proof (got: $(cat "${argv_log}" 2>/dev/null))"
+  fi
+  {
+    printf 'arg1=--list\n==\n'
+    printf 'arg1=--create\narg2=--comments\narg3=%s\n==\n' "${comment}"
+    printf 'arg1=--list\n==\n'
+  } > "${ts_log}.expected"
+  if [[ -f "${ts_log}" ]] && cmp -s "${ts_log}" "${ts_log}.expected"; then
+    pass "hostile comment (${slug}) arrives at timeshift as exactly its third argument and nothing else"
+  else
+    fail "hostile comment (${slug}) timeshift argv proof (got: $(cat "${ts_log}" 2>/dev/null))"
+  fi
+}
+
+bv_tg_case "family photos backup" "spaces"
+bv_tg_case "it's \$HOME; reboot" "hostile1"
+bv_tg_case 'say "hi; there" now' "hostile2"
+
+# book-access-doctor undo with a recorded mount target containing a space:
+# the recorded target must reach the stub mount as ONE argv word, and the
+# display must quote it.
+BV_BK_BIN="${TMPBASE}/bv-bin-bk"
+bk_make_bin "${BV_BK_BIN}" >/dev/null
+cp "${BK_STUB_ROOT}/findmnt" "${BK_STUB_ROOT}/mount" "${BV_BK_BIN}/"
+cat <<'BV_SUDO_STUB' > "${BV_BK_BIN}/sudo"
+#!/usr/bin/env bash
+set -euo pipefail
+ARGVLOG="${MB_ARGV_SUDO_LOG:-}"
+if [[ -n "${ARGVLOG}" && "$#" -gt 0 ]]; then
+  printf '%s\n' "$@" >> "${ARGVLOG}"
+  printf '==\n' >> "${ARGVLOG}"
+fi
+exec "$@"
+BV_SUDO_STUB
+chmod +x "${BV_BK_BIN}/sudo"
+BV_BK_HOME="${TMPBASE}/bv-home-bk"
+BV_BK_TABLE="${TMPBASE}/bv-bk-table.txt"
+BV_BK_ARGV="${TMPBASE}/bv-bk-argv.log"
+BV_BK_TARGET="/media/user/MY KINDLE"
+mkdir -p "${BV_BK_HOME}/.local/state/mintbutler/book-access-doctor"
+printf 'target=%s\n' "${BV_BK_TARGET}" > "${BV_BK_HOME}/${BK_STATE_REL}"
+printf 'prev_opts=ro,nosuid,nodev,relatime\n' >> "${BV_BK_HOME}/${BK_STATE_REL}"
+printf '/|/dev/nvme0n1p2|ext4|rw,relatime\n/media/user/MY KINDLE|/dev/sdb1|vfat|rw,nosuid,nodev,relatime\n' > "${BV_BK_TABLE}"
+rm -f "${BV_BK_ARGV}"
+bv_bk_out=""
+bv_bk_code="0"
+bv_bk_out="$(PATH="${BV_BK_BIN}" HOME="${BV_BK_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BV_BK_TABLE}" MB_ARGV_SUDO_LOG="${BV_BK_ARGV}" \
+  bash "${BK_MODULE}" undo < /dev/null 2>&1)" || bv_bk_code="$?"
+if [[ "${bv_bk_code}" -eq 0 ]]; then
+  pass "book undo with a space-containing recorded target exits 0"
+else
+  fail "book undo with a space-containing recorded target exits 0 (got ${bv_bk_code}: ${bv_bk_out})"
+fi
+{
+  printf 'mount\n-o\nremount,ro\n%s\n==\n' "${BV_BK_TARGET}"
+} > "${BV_BK_ARGV}.expected"
+if [[ -f "${BV_BK_ARGV}" ]] && cmp -s "${BV_BK_ARGV}" "${BV_BK_ARGV}.expected"; then
+  pass "the space-containing mount target reaches the stub mount as exactly ONE argv word"
+else
+  fail "the space-containing mount target reaches the stub mount as exactly ONE argv word (got: $(cat "${BV_BK_ARGV}" 2>/dev/null))"
+fi
+if printf '%s\n' "${bv_bk_out}" | grep -Fxq "Elevated step: sudo mount -o remount,ro '/media/user/MY KINDLE'"; then
+  pass "the display of the space-containing target is the single-quoted form a human would type"
+else
+  fail "the display of the space-containing target is the single-quoted form a human would type (got: ${bv_bk_out})"
+fi
+if grep -Fq "/media/user/MY KINDLE|/dev/sdb1|vfat|ro," "${BV_BK_TABLE}"; then
+  pass "the stub remount flipped the space-containing target row to read-only"
+else
+  fail "the stub remount flipped the space-containing target row to read-only (got: $(cat "${BV_BK_TABLE}"))"
+fi
+
+# ---------------------------------------------------------------------------
+# Stage (bw): the menu-confirmation law (MODULE_SPEC §3, MB-004) at the menu
+# level. Exactly ONE confirmation per repair launch, and the module asks
+# nothing after that. Three proofs:
+#   1. elevated lane: the interactive menu drives book-access-doctor with the
+#      stub mount table; the typed-slug prompt appears exactly once, no [y/N]
+#      prompt appears anywhere, exactly one elevated remount runs, and the
+#      table flips read-write.
+#   2. low-risk lane: `./butler --run printer-helper` with scripted y; the
+#      "Run 'printer-helper'?" prompt is the ONLY [y/N] in the entire output.
+#   3. contract lane: piping an elevated module without a terminal still
+#      refuses before anything runs.
+# ---------------------------------------------------------------------------
+printf 'Stage bw: menu-confirmation law (exactly one confirmation per launch)\n'
+
+# --- 1. Elevated lane through the interactive menu -------------------------
+BW_BK_BIN="${BK_STUB_ROOT}/bin-bw"
+bk_make_bin "${BW_BK_BIN}" >/dev/null
+cp "${BK_STUB_ROOT}/findmnt" "${BK_STUB_ROOT}/mount" "${BW_BK_BIN}/"
+cp "${BK_STUB_ROOT}/sudo-pass" "${BW_BK_BIN}/sudo"
+for bw_tool in sort basename cat; do
+  bw_tool_path="$(command -v "${bw_tool}" || true)"
+  if [[ -n "${bw_tool_path}" ]]; then
+    ln -sf "${bw_tool_path}" "${BW_BK_BIN}/${bw_tool}"
+  fi
+done
+BW_BK_HOME="${TMPBASE}/bw-home-bk"
+BW_BK_TABLE="${TMPBASE}/bw-bk-table.txt"
+BW_BK_ELEV_LOG="${TMPBASE}/bw-bk-elevated.log"
+BW_BK_OUT="${TMPBASE}/bw-bk.out"
+mkdir -p "${BW_BK_HOME}"
+printf '%s\n' "${BK_ROW_ROOT}" "${BK_ROW_RO_VFAT}" > "${BW_BK_TABLE}"
+rm -f "${BW_BK_ELEV_LOG}"
+code_bw_bk="0"
+printf '/book\n1\nr\nbook-access-doctor\nb\nq\n' | \
+  PATH="${BW_BK_BIN}" HOME="${BW_BK_HOME}" XDG_STATE_HOME="" \
+  MOUNT_STUB_TABLE="${BW_BK_TABLE}" ELEVATED_STUB_LOG="${BW_BK_ELEV_LOG}" \
+  "${REPO_ROOT}/butler" > "${BW_BK_OUT}" 2>&1 || code_bw_bk="$?"
+if [[ "${code_bw_bk}" -eq 0 ]]; then
+  pass "menu drive-through of an elevated repair exits 0"
+else
+  fail "menu drive-through of an elevated repair exits 0 (got ${code_bw_bk})"
+fi
+bw_bk_slug_prompts="$(grep -c "Type the module slug 'book-access-doctor' to confirm" "${BW_BK_OUT}" || true)"
+if [[ "${bw_bk_slug_prompts}" -eq 1 ]]; then
+  pass "the typed-slug confirmation appears exactly once per elevated repair launch"
+else
+  fail "the typed-slug confirmation appears exactly once per elevated repair launch (got ${bw_bk_slug_prompts})"
+fi
+bw_bk_yn="$(grep -c '\[y/N\]' "${BW_BK_OUT}" || true)"
+if [[ "${bw_bk_yn}" -eq 0 ]]; then
+  pass "no [y/N] prompt appears anywhere in an elevated menu run (module asks nothing)"
+else
+  fail "no [y/N] prompt appears anywhere in an elevated menu run (got ${bw_bk_yn})"
+fi
+if [[ -f "${BW_BK_ELEV_LOG}" ]] \
+  && cmp -s "${BW_BK_ELEV_LOG}" <(printf 'sudo mount -o remount,rw %s\n' "${BK_TARGET_RO}"); then
+  pass "exactly one elevated step runs after the one menu confirmation"
+else
+  fail "exactly one elevated step runs after the one menu confirmation (got: $(cat "${BW_BK_ELEV_LOG}" 2>/dev/null))"
+fi
+if grep -Fq "/media/user/KINDLE|/dev/sdb1|vfat|rw," "${BW_BK_TABLE}"; then
+  pass "the menu-driven repair flips the stub table read-write"
+else
+  fail "the menu-driven repair flips the stub table read-write (got: $(cat "${BW_BK_TABLE}"))"
+fi
+
+# --- 2. Low-risk lane through --run ----------------------------------------
+BW_PH_BIN="${PH_STUB_ROOT}/bin-bw"
+ph_make_bin "${BW_PH_BIN}" >/dev/null
+cp "${PH_STUB_ROOT}/lpstat" "${PH_STUB_ROOT}/lpinfo" "${PH_STUB_ROOT}/lpoptions" "${BW_PH_BIN}/"
+for bw_tool in sort basename; do
+  bw_tool_path="$(command -v "${bw_tool}" || true)"
+  if [[ -n "${bw_tool_path}" ]]; then
+    ln -sf "${bw_tool_path}" "${BW_PH_BIN}/${bw_tool}"
+  fi
+done
+BW_PH_HOME="${TMPBASE}/bw-home-ph"
+BW_PH_STATE="${TMPBASE}/bw-ph-default.txt"
+BW_PH_OPT="${TMPBASE}/bw-ph-lpoptions.log"
+BW_PH_OUT="${TMPBASE}/bw-ph.out"
+mkdir -p "${BW_PH_HOME}"
+printf 'default=none\n' > "${BW_PH_STATE}"
+rm -f "${BW_PH_OPT}"
+code_bw_ph="0"
+printf 'y\n' | \
+  PATH="${BW_PH_BIN}" HOME="${BW_PH_HOME}" XDG_STATE_HOME="" \
+  LPSTAT_STUB_STATE="${BW_PH_STATE}" LPSTAT_STUB_QUEUES="${PH_QUEUE_IDLE}" \
+  LPINFO_STUB_MODE=usb LPOPTIONS_STUB_LOG="${BW_PH_OPT}" \
+  "${REPO_ROOT}/butler" --run printer-helper > "${BW_PH_OUT}" 2>&1 || code_bw_ph="$?"
+if [[ "${code_bw_ph}" -eq 0 ]]; then
+  pass "the --run lane of a low-risk repair exits 0 on the scripted y"
+else
+  fail "the --run lane of a low-risk repair exits 0 on the scripted y (got ${code_bw_ph})"
+fi
+bw_ph_prompts="$(grep -c "Run 'printer-helper'?" "${BW_PH_OUT}" || true)"
+bw_ph_yn="$(grep -c '\[y/N\]' "${BW_PH_OUT}" || true)"
+if [[ "${bw_ph_prompts}" -eq 1 && "${bw_ph_yn}" -eq 1 ]]; then
+  pass "the low-risk launch shows exactly one [y/N] prompt — the menu's own — and the module adds none"
+else
+  fail "the low-risk launch shows exactly one [y/N] prompt (got prompt=${bw_ph_prompts} yn=${bw_ph_yn})"
+fi
+if [[ -f "${BW_PH_OPT}" ]] \
+  && cmp -s "${BW_PH_OPT}" <(printf 'lpoptions -d OfficeJet-5200\n'); then
+  pass "the low-risk repair runs after the one menu confirmation"
+else
+  fail "the low-risk repair runs after the one menu confirmation (got: $(cat "${BW_PH_OPT}" 2>/dev/null))"
+fi
+if grep -q '^default=OfficeJet-5200$' "${BW_PH_STATE}"; then
+  pass "the menu-driven low-risk repair leaves the new default in the stub stack"
+else
+  fail "the menu-driven low-risk repair leaves the new default in the stub stack (got: $(cat "${BW_PH_STATE}"))"
+fi
+
+# --- 3. Piped elevated refusal contract ------------------------------------
+BW_NO_TTY_OUT="${TMPBASE}/bw-notty.out"
+code_bw_notty="0"
+printf 'book-access-doctor\n' | \
+  PATH="${BW_BK_BIN}" HOME="${BW_BK_HOME}" XDG_STATE_HOME="" \
+  "${REPO_ROOT}/butler" --run book-access-doctor > "${BW_NO_TTY_OUT}" 2>&1 || code_bw_notty="$?"
+if [[ "${code_bw_notty}" -eq 1 ]] \
+  && grep -Fq "Cannot confirm elevated module 'book-access-doctor' without a terminal" "${BW_NO_TTY_OUT}"; then
+  pass "piping an elevated module without a terminal still refuses with the plain contract line"
+else
+  fail "piping an elevated module without a terminal still refuses (got ${code_bw_notty}: $(cat "${BW_NO_TTY_OUT}"))"
+fi
+# ---------------------------------------------------------------------------
+# Stage (bx): the real-sudo lane (MB-002), report-only and consent-gated.
+# Skipped unless MB_TEST_ALLOW_REAL_SUDO=1; with consent it probes
+# `sudo -n true`, reports the result, and always passes.
+# ---------------------------------------------------------------------------
+printf 'Stage bx: real-sudo lane (consent-gated)\n'
+if [[ "${MB_TEST_ALLOW_REAL_SUDO}" == "1" ]]; then
+  bx_sudo_path="$(command -v sudo || true)"
+  if [[ -z "${bx_sudo_path}" ]]; then
+    pass "real-sudo lane (consent given): no sudo binary on this host — nothing to probe"
+  else
+    code_bx_probe="0"
+    sudo -n true >/dev/null 2>&1 || code_bx_probe="$?"
+    pass "real-sudo lane (consent given): sudo -n true probe report-only (exit ${code_bx_probe})"
+  fi
+else
+  pass "real-sudo lane skipped (no consent): set MB_TEST_ALLOW_REAL_SUDO=1 to enable the report-only probe"
+fi
+
+# ---------------------------------------------------------------------------
+# Stage (by): the tripwire (MB-002). With consent unset, prove the harness
+# PATH sudo is the refusing stub, prove the stub works (a deliberate probe is
+# recorded and refused), and prove the entire run before this file wrote
+# exactly ONE attempt into the log — the probe itself — i.e. zero real sudo
+# attempts happened anywhere in the suite.
+# ---------------------------------------------------------------------------
+printf 'Stage by: tripwire (zero real sudo attempts without consent)\n'
+if [[ "${MB_TEST_ALLOW_REAL_SUDO}" == "1" ]]; then
+  pass "tripwire disarmed by consent (MB_TEST_ALLOW_REAL_SUDO=1) — the safe stub was never installed"
+else
+  by_sudo_path="$(command -v sudo || true)"
+  by_probe_code="0"
+  sudo mb-tripwire-probe-marker >/dev/null 2>&1 || by_probe_code="$?"
+  by_probe_seen="0"
+  if grep -Fq "sudo mb-tripwire-probe-marker" "${MB_SUDO_TRIPWIRE_LOG}"; then
+    by_probe_seen="1"
+  fi
+  if [[ "${by_sudo_path}" == "${MB_SAFE_BIN}/sudo" && "${by_probe_code}" -eq 1 && "${by_probe_seen}" -eq 1 ]]; then
+    pass "the harness sudo resolves to the refusing recording stub (probe: logged, refused exit 1)"
+  else
+    fail "the harness sudo resolves to the refusing recording stub (got path=${by_sudo_path} code=${by_probe_code} seen=${by_probe_seen})"
+  fi
+
+  by_attempts="$(grep -c . "${MB_SUDO_TRIPWIRE_LOG}" || true)"
+  if [[ "${by_attempts}" -eq 1 ]]; then
+    pass "the whole suite produced zero real sudo attempts (only the deliberate probe reached the stub)"
+  else
+    fail "the whole suite produced zero real sudo attempts (tripwire holds ${by_attempts} lines: $(cat "${MB_SUDO_TRIPWIRE_LOG}"))"
+  fi
+
+  if [[ "$(sha256sum "${MB_SAFE_BIN}/sudo" | cut -d' ' -f1)" == "${MB_SAFE_STUB_SHA}" ]]; then
+    pass "the refusing sudo stub in the harness bin is unchanged"
+  else
+    fail "the refusing sudo stub was modified during the run"
+  fi
+fi
 
 printf 'Passed: %s, Failed: %s\n' "${PASS_COUNT}" "${FAIL_COUNT}"
 if [[ "${FAIL_COUNT}" -gt 0 ]]; then

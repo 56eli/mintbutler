@@ -4,5 +4,5 @@ description: >-
 risk: elevated
 undo: true
 needs: [pactl, amixer]
-asks: 1
+asks: 0
 order: 910

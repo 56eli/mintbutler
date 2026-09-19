@@ -8,8 +8,10 @@ set -euo pipefail
 # mount options, writable or not), and delivers an honest verdict.
 #
 # The ONE repair it makes: when a discovered mount is read-only, an elevated
-# `mount -o remount,rw <target>` after ONE confirmation, recorded BEFORE it runs
-# and restorable on undo (undo remounts the same target read-only again).
+# `mount -o remount,rw <target>`, recorded BEFORE it runs and restorable on
+# undo (undo remounts the same target read-only again). This module asks no
+# safety question: the menu takes the single typed-slug confirmation for an
+# elevated run before this module launches (MODULE_SPEC §3, MB-004).
 # Owner rulings this module obeys (2026-09-16, binding):
 #   - remount-as-elevated is fine; the privileged prefix lives only in
 #     lib/elevate.sh, never in this file;
@@ -28,8 +30,8 @@ set -euo pipefail
 #   4. all rw and writable -> healthy verdict, nothing asked, nothing changed
 #   5. first read-only mount -> fstype allowlist check (a read-only medium such
 #      as iso9660 earns an honest not-applicable verdict), then current versus
-#      proposed plus the exact elevated command, ONE confirmation, record,
-#      remount read-write, verify, report
+#      proposed plus the exact elevated command, record, remount read-write,
+#      verify, report
 #   6. undo: remount the recorded target read-only, verify, delete the record
 #
 # Test seam: the writability probe (`test -w <target>`) can be pointed at a
@@ -38,12 +40,12 @@ set -euo pipefail
 # path; it is unset on a real system, so there the probe is exactly
 # `test -w "<target>"`. Every reported path stays the real one.
 #
-# Elevated-command note: every elevated command is DISPLAYED through
-# lib/elevate.sh's elevate_command_line with its target shell-quoted, which is
-# what a human would type. The command STRING handed to elevate_run carries the
-# same target unquoted, because that helper splits the string into words itself
-# and never runs a shell — quotes inside it would reach mount as literal
-# characters and the real remount would fail.
+# Elevated-command note: every elevated command travels as an ARGV LIST from
+# this module to the elevated executor (lib/elevate.sh, MB-001) — the target
+# is one argv word, so spaces or shell metacharacters in it can never smuggle
+# extra words.
+# The displayed command line is DERIVED from that same list, quoting only the
+# words that need it, exactly as a human would type them.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${MINTBUTLER_LIB_DIR:-$(cd "${SCRIPT_DIR}/../../lib" && pwd)}"
@@ -54,8 +56,6 @@ export MINTBUTLER_MODULE_SLUG="${MINTBUTLER_MODULE_SLUG:-book-access-doctor}"
 
 # shellcheck source=lib/elevate.sh
 source "${LIB_DIR}/elevate.sh"
-# shellcheck source=lib/ask.sh
-source "${LIB_DIR}/ask.sh"
 
 STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/mintbutler/book-access-doctor"
 STATE_FILE="${STATE_DIR}/remount.record"
@@ -237,8 +237,9 @@ plan() {
   printf '5. A read-only mount -> ONE repair, and only for these filesystem types:\n'
   printf '   %s. A read-only medium such as\n' "$(remountable_list)"
   printf '   iso9660 earns an honest "remounting rw does not apply" verdict instead.\n'
-  printf '   Otherwise: show current versus proposed and the exact elevated command, ask\n'
-  printf '   ONE confirmation; on yes only: record, remount read-write, verify, report.\n'
+  printf '   Otherwise: show current versus proposed and the exact elevated command,\n'
+  printf '   then record, remount read-write, verify, report — the menu took the one\n'
+  printf '   confirmation for this run before launch; this module asks nothing.\n'
   printf '6. Undo remounts the recorded target read-only again, then deletes the record.\n'
   printf '7. mintbutler never writes /etc/fstab — persistent-mount guidance is printed as\n'
   printf '   information only — and never runs chmod or chown: no permission changes.\n'
@@ -248,12 +249,11 @@ dry_run() {
   plan
   printf '\n'
   printf 'Exact commands (nothing runs now; values as read):\n'
-  printf '  findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS   (discovery; read-only)\n'
-  printf "  findmnt -n -o OPTIONS '<target>'             (re-check; read-only)\n"
-  printf '  %s   (the only elevated step, after your yes)\n' \
-    "$(elevate_command_line "mount -o remount,rw '<target>'")"
+  printf "  findmnt -n -o TARGET,SOURCE,FSTYPE,OPTIONS, then -o OPTIONS '<target>'  (read-only)\n"
+  printf '  %s   (the only elevated step; the menu confirmed this run)\n' \
+    "$(elevate_command_line mount -o remount,rw "<target>")"
   printf '  undo: %s   (from the record)\n' \
-    "$(elevate_command_line "mount -o remount,ro '<target>'")"
+    "$(elevate_command_line mount -o remount,ro "<target>")"
   printf '  state: %s is written before the remount and deleted by undo\n' "${STATE_FILE}"
 }
 
@@ -346,18 +346,14 @@ run() {
   printf '\nThis mount is the repairable culprit here:\n'
   printf '  current:  %s — %s, %s from %s\n' "${target}" "${current_word}" "${fstype}" "${source}"
   printf '  proposed: the same mount remounted read-write (rw); nothing else about it changes\n'
-  printf '  command:  %s\n' "$(elevate_command_line "mount -o remount,rw '${target}'")"
+  printf '  command:  %s\n' "$(elevate_command_line mount -o remount,rw "${target}")"
   if has_option "${options}" rw; then
     printf '  note:     this mount already reports read-write, so a remount may change nothing — the refusal comes from the device or its filesystem, and mintbutler changes no permission anywhere.\n'
   fi
   printf 'A remount lasts until the device is unplugged or the machine reboots: mintbutler never writes /etc/fstab and never changes a permission.\n'
 
-  # The ONE question this module asks (manifest asks: 1); Enter or EOF means NO.
-  if ! ask_yn "Remount ${target} read-write now (recorded first; undo restores read-only)"; then
-    printf 'Nothing changed.\n'
-    exit 0
-  fi
-
+  # No in-module safety question (MODULE_SPEC §3): the menu took the single
+  # confirmation for this run before this module launched.
   # Record the target and its exact previous options BEFORE anything runs, so
   # undo can restore the pre-repair state even if the remount half-succeeds.
   mkdir -p "${STATE_DIR}"
@@ -367,12 +363,10 @@ run() {
   } > "${STATE_FILE}"
   printf 'Recorded the previous mount options in %s\n' "${STATE_FILE}"
 
-  # The single elevated step. lib/elevate.sh splits the command string into
-  # words itself and never runs a shell, so the target is passed unquoted here
-  # while the human-facing display above shows the shell-quoted form of exactly
-  # the same command.
+  # The single elevated step. The target is ONE argv word from here to the
+  # executor (MB-001); the display above is derived from the same list.
   local remount_code=0
-  elevate_run "mount -o remount,rw ${target}" || remount_code="$?"
+  elevate_run mount -o remount,rw "${target}" || remount_code="$?"
   if [[ "${remount_code}" -ne 0 ]]; then
     printf 'The remount failed (the elevated command exited %d); the record is kept at %s — undo can remount read-only to restore the previous state.\n' "${remount_code}" "${STATE_FILE}" >&2
     exit 1
@@ -444,13 +438,12 @@ undo() {
   esac
 
   printf 'Undoing the remount: %s goes back to the read-only state it had before the repair.\n' "${rec_target}"
-  printf 'Elevated step: %s\n' "$(elevate_command_line "mount -o remount,ro '${rec_target}'")"
+  printf 'Elevated step: %s\n' "$(elevate_command_line mount -o remount,ro "${rec_target}")"
 
-  # lib/elevate.sh splits the command string into words itself, so the recorded
-  # target is passed unquoted here; the display above is the quoted form of the
-  # very same command.
+  # The recorded target is ONE argv word here (MB-001); the display above is
+  # derived from the very same list.
   local undo_code=0
-  elevate_run "mount -o remount,ro ${rec_target}" || undo_code="$?"
+  elevate_run mount -o remount,ro "${rec_target}" || undo_code="$?"
   if [[ "${undo_code}" -ne 0 ]]; then
     printf 'Could not remount %s read-only (the elevated command exited %d); the record is kept at %s.\n' "${rec_target}" "${undo_code}" "${STATE_FILE}" >&2
     return 1

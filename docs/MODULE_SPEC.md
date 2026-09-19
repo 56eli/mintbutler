@@ -56,6 +56,16 @@ command and the undo statement. `undo: false` must be stated in the
 description in plain words (e.g. "Package installs are not cleanly
 undoable; this module says so instead of pretending.").
 
+`needs:` enforcement (owner ruling 2026-09-18, MB-003/MB-005): entries are
+LAUNCH-TIME requirements — commands the module cannot run without — never a
+shopping list for the module to fetch (a module installs nothing to satisfy
+its own needs; the user does that via Mint's Software Manager, explicitly).
+While any declared need is absent on the host, the menu refuses to launch
+`run`/`undo` with one plain line — `<slug>: not ready — missing need: <need>`
+— and `--scan` reports the non-fatal `WARN <slug>: missing need: <need>`.
+`plan`/`dry-run` stay available: they change nothing and teach the exact
+command to satisfy the need.
+
 ## 3. Script contract (`module.sh`)
 
 Invoked by the menu as:
@@ -83,6 +93,7 @@ Conventions:
   they must not `eval`, fetch-and-execute (`curl … | bash`), or build
   command strings from input at runtime.
 - A module may ask a short, BOUNDED series of questions, each collecting a value only the user knows. The question budget is declared in the manifest (`asks: <n>`). Optional values accept Enter to skip. Every safety confirmation (risk badge, run/undo, elevated) stays with the menu, never inside the module. Question flows must be testable non-interactively (scripted stdin).
+- **One confirmation per launch, at the menu (owner ruling 2026-09-18, MB-004).** The menu asks exactly one confirmation before a `run`/`undo` (typed slug for `risk: elevated`, one `Run '<slug>'? [y/N]` otherwise) and the module then runs to completion without re-asking anything. A module must never prompt for a y/N or other safety confirmation itself — `asks:` counts value questions only. A module invoked directly (developer lane) therefore also asks no safety question; it simply does its documented work.
 - **User-level first.** No `sudo`/`pkexec` in `risk: low`. `elevated`
   modules use the shared `elevate` helper only (single confirmed, displayed
   step), and only for what genuinely needs it (e.g. `apt-get install` of
@@ -113,7 +124,9 @@ Conventions:
 - On selection: clear screen, show `title`, `description`, risk badge, undo
   statement, then the menu: `[d]ry-run  [r]un  [u]ndo  [b]ack`.
 - `run`/`undo` on `elevated`: show the exact command list, require typed
-  confirmation, then execute with the `elevate` helper.
+  confirmation, then execute with the `elevate` helper. This — and the
+  matching single `[y/N]` for low-risk modules — is the ONLY confirmation of
+  a launch; the module must not ask again (MB-004).
 - Colors: ANSI when `stdout` is a TTY; plain otherwise (SSH/pipe-safe).
 - Flags: `--list` (slugs + titles), `--run <slug>` (with `--dry-run`),
   `--scan` (run modulelint over all modules), `--help`.
@@ -136,7 +149,20 @@ Runs on every PR (and via `./butler --scan` locally). A module passes only if:
    exit 0 and produce a non-empty plan; filesystem diff must be empty.
 5. `run` executed in the same sandbox must either succeed, or fail with a
    plain-language stderr line — and never touch anything outside the
-   sandbox HOME (strace/diff verified when available).
+   sandbox HOME (strace/diff verified when available). The sandbox PATH
+   additionally shadows `sudo` and the session mutators (`amixer`,
+   `lpoptions`, `dconf`) with refusing stubs (MB-002): a module under lint
+   can never reach real privilege or real user settings — `'needs: sudo'`
+   and elevated behavior are simulated by the test harness's stub stages,
+   while the module contract itself (describe/plan/dry-run/run) is
+   exercised here against refusal-or-success already.
+6. 23-line law, fully mechanical (MB-003): `describe`, `plan`, and `dry-run`
+   stdout must each render in at most 23 terminal lines (strict line count,
+   no exceptions). The test suite additionally renders every module's menu
+   screens and applies the same bound.
+7. `needs:` advisory (MB-005): a module whose declared needs are absent on
+   the lint host still PASSES — honesty about a requirement is not a defect —
+   but the report carries `WARN <slug>: missing need: <need>` (non-fatal).
 
 The gate for every module PR = `modulelint` green + orchestrator's
 independent read of the exact commands + owner merge. The same discipline

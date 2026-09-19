@@ -116,6 +116,27 @@ an orchestrator or builder session booting here:
    repo's sandboxes/CI plus the owner's manual acceptance; the owner runs
    `butler` on Mint 22.2 and reports back.
 
+### Running the tests
+
+```bash
+bash tests/run-tests.sh
+bin/modulelint                 # all modules in modules/
+bin/modulelint <slug>          # one module
+```
+
+- `tests/run-tests.sh` is a zero-dependency harness: it copies butler +
+  lib + fixtures into a temp dir and exercises every module against stub
+  binaries. **It defaults to NEVER invoking real binaries** — by default a
+  refusing, recording `sudo` stub sits first on the harness PATH as a
+  tripwire (any accidental real `sudo` is declined and logged). Enter
+  `MB_TEST_ALLOW_REAL_SUDO=1 bash tests/run-tests.sh` to consent to the
+  real-sudo lane, which today only probes `sudo -n true` and reports the
+  result; no stage needs it.
+- `bin/modulelint` runs `describe`/`plan`/`dry-run`/`run` in a sandbox:
+  fake `HOME`, and `sudo`, `amixer`, `lpoptions`, `dconf` shadowed by
+  refusing stubs, so a module can never touch real privileges or session
+  settings through lint.
+
 ## Roadmap
 
 - v0.1 — menu script + module discovery + `modulelint` + desktop-shortcut-

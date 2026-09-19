@@ -34,7 +34,8 @@ Plan for appimage-installer:
 1. Ask for the path to the .AppImage file (q cancels at every question)
 2. Validate it: existing, regular, readable, named .AppImage or .appimage
 3. Ask for the menu entry name (Enter accepts the derived default)
-4. Ask for apply confirmation (Enter = no; nothing is written before a yes)
+4. Show the install summary (from/copy/entry) and proceed — the menu
+   already took the single confirmation for this run
 5. Copy to ~/.local/share/mintbutler-appimages/<name>.AppImage, chmod +x
    (same bytes already there -> reuse; a different one lands as -2, -3, ...)
 6. Create the menu entry via the shared lib/desktop-entry.sh pipeline and
@@ -56,7 +57,7 @@ dry_run() {
 }
 
 run() {
-  # Question 1 of 3: path to the AppImage (q cancels).
+  # Question 1 of 2: path to the AppImage (q cancels).
   local src=""
   if ! src="$(ask_value "Path to the .AppImage file (q to cancel)")"; then
     printf 'This module needs interactive input; start it from the butler menu.\n' >&2
@@ -102,7 +103,7 @@ run() {
   local derived_name=""
   derived_name="$(printf '%s' "${stem}" | tr '_-' '  ')"
 
-  # Question 2 of 3: the entry name (Enter accepts the derived default).
+  # Question 2 of 2: the entry name (Enter accepts the derived default).
   local name=""
   if ! name="$(ask_value "Menu entry name [default: ${derived_name}]" "${derived_name}")"; then
     printf 'This module needs interactive input; start it from the butler menu.\n' >&2
@@ -120,16 +121,12 @@ run() {
     exit 1
   fi
 
-  # Question 3 of 3: apply confirmation. Enter defaults to no; nothing has
-  # been written up to this point.
+  # Informational summary immediately before the install proceeds — the
+  # menu already took the single confirmation for this run (MB-004).
   printf 'About to install:\n'
   printf '  from:  %s\n' "${src}"
   printf '  copy:  %s/%s.AppImage (a name collision lands as -2, -3, ...)\n' "${INSTALL_DIR}" "${slug}"
   printf '  entry: %s/%s.desktop (menu name: %s)\n' "${APP_DIR}" "${slug}" "${name}"
-  if ! ask_yn "Install this AppImage?"; then
-    printf 'Nothing changed.\n'
-    return 0
-  fi
 
   # Install the private copy. An identical existing copy is reused as-is;
   # a different file at that name shifts this one to the first free -N.

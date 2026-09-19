@@ -4,5 +4,5 @@ description: >-
 risk: elevated
 undo: false
 needs: [dpkg, apt-get]
-asks: 1
+asks: 0
 order: 40

@@ -4,5 +4,5 @@ description: >-
 risk: elevated
 undo: false
 needs: [timeshift]
-asks: 2
+asks: 1
 order: 80
