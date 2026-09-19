@@ -5,10 +5,10 @@ set -euo pipefail
 # Changes the user's default application for a chosen MIME category (or a
 # custom MIME type) through xdg-mime. Before anything is written, the module
 # shows the current default versus the new one for every type in the
-# category; on confirm it first backs up mimeapps.list byte for byte, and
-# undo restores that backup exactly. User-level only: xdg-mime writes the
-# per-user mimeapps.list state and nothing else; nothing outside $HOME is
-# ever touched.
+# category, then backs up mimeapps.list byte for byte and applies the change
+# (the menu takes the single confirmation for the run); undo restores that
+# backup exactly. User-level only: xdg-mime writes the per-user mimeapps.list
+# state and nothing else; nothing outside $HOME is ever touched.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${MINTBUTLER_LIB_DIR:-$(cd "${SCRIPT_DIR}/../../lib" && pwd)}"
@@ -55,7 +55,7 @@ plan() {
   printf '1. Ask which category (or custom MIME type) to change\n'
   printf '2. Scan .desktop entries that claim those MIME types; pick one application\n'
   printf '3. Show the current default versus the new one for every type in the category\n'
-  printf '4. On confirm, back up %s first\n' "${CONFIG_FILE}"
+  printf '4. Back up %s and apply the change (the menu already took the single confirmation)\n' "${CONFIG_FILE}"
   printf '   (BACKUP_MISSING is recorded when the file does not exist yet)\n'
   printf '5. Run xdg-mime default <chosen>.desktop <mime> for each type, then verify\n'
   printf '   each with xdg-mime query default; any mismatch restores the backup\n'
@@ -213,7 +213,7 @@ run() {
     exit 1
   fi
 
-  # Question 1 of 4: the category. A category is required — Enter does not
+  # Question 1 of 3: the category. A category is required — Enter does not
   # skip; the question repeats until a valid choice (or q to cancel).
   local choice=""
   while true; do
@@ -235,7 +235,7 @@ run() {
   local category_label=""
   local -a mime_types=()
   if [[ "${choice}" == "9" || "${choice}" == "custom" || "${choice}" == "Custom" ]]; then
-    # Question 2 of 4: the custom MIME type — only asked for entry 9.
+    # Question 2 of 3: the custom MIME type — only asked for entry 9.
     local custom_mime=""
     while true; do
       if ! custom_mime="$(ask_value "MIME type to change (e.g. image/webp, q to cancel)")"; then
@@ -275,7 +275,7 @@ run() {
     exit 1
   fi
 
-  # Question 3 of 4: which application takes over (paginated picker).
+  # Question 3 of 3: which application takes over (paginated picker).
   local -a labels=()
   local ci
   for ci in "${!CAND_NAMES[@]}"; do
@@ -323,12 +323,9 @@ run() {
     printf '    new: %s (%s)\n' "${chosen_name}" "${chosen_id}"
   done
 
-  # Question 4 of 4: apply confirmation. Enter keeps the current defaults.
-  if ! ask_yn "Apply this change?"; then
-    printf 'Nothing changed.\n'
-    return 0
-  fi
-
+  # No apply confirmation here (MB-004): the menu already took the single
+  # confirmation for this run; the current-vs-new listing above is the
+  # informational output immediately before the change proceeds.
   mkdir -p "${STATE_DIR}"
   local backup_missing="no"
   if [[ -f "${CONFIG_FILE}" ]]; then

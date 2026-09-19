@@ -1689,8 +1689,9 @@ else
   fail "non-interactive run modified the fake HOME"
 fi
 
-# Stage (ac): happy path — category 1, app 1, confirm y.
-printf 'Stage ac: default-apps-editor happy path\n'
+# Stage (ac): happy path — category 1, app 1; the menu confirmed, so the
+# module applies without asking anything (MB-004).
+printf 'Stage ac: default-apps-editor happy path (menu-confirmation law: no in-module apply prompt)\n'
 DA_AC_HOME="${TMPBASE}/da-home-ac"
 mkdir -p "${DA_AC_HOME}/.config"
 DA_AC_CONFIG="${DA_AC_HOME}/.config/mimeapps.list"
@@ -1702,12 +1703,17 @@ EOF
 cp "${DA_AC_CONFIG}" "${DA_AC_PRERUN}"
 output_ac=""
 code_ac="0"
-output_ac="$(printf '1\n1\ny\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AC_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+output_ac="$(printf '1\n1\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AC_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
   bash "${DA_MODULE}" run 2>&1)" || code_ac="$?"
 if [[ "${code_ac}" -eq 0 ]]; then
   pass "happy path run exits 0"
 else
   fail "happy path run exits 0 (got ${code_ac})"
+fi
+if printf '%s\n' "${output_ac}" | grep -qi '\[y/N\]'; then
+  fail "default-apps-editor asks no y/N question once launched (MB-004 completion violated)"
+else
+  pass "default-apps-editor asks no y/N question once launched (the menu confirms; MB-004 completion)"
 fi
 if printf '%s\n' "${output_ac}" | grep -q "current:" && printf '%s\n' "${output_ac}" | grep -q "new:"; then
   pass "happy path output shows current-versus-new"
@@ -1820,7 +1826,7 @@ EOF
 cp "${DA_AF_CONFIG}" "${DA_AF_PRERUN}"
 stderr_af=""
 code_af="0"
-stderr_af="$(printf '4\n1\ny\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AF_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
+stderr_af="$(printf '4\n1\n' | PATH="${DA_STUB_ROOT}:${PATH}" HOME="${DA_AF_HOME}" XDG_DATA_DIRS="${DA_DATA}" \
   XDG_MIME_STUB_QUERY_ALWAYS=someone-else.desktop bash "${DA_MODULE}" run 2>&1 >/dev/null)" || code_af="$?"
 if [[ "${code_af}" -eq 1 ]]; then
   pass "verify-failure run exits 1"
@@ -2023,13 +2029,18 @@ AI_AH_ENTRY="${AI_AH_APPS}/my-app-v1.desktop"
 AI_AH_STATE="${AI_AH_HOME}/${AI_STATE_REL}/my-app-v1.paths"
 output_ah=""
 code_ah="0"
-output_ah="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+output_ah="$(printf '%s\n\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
   MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AH_HOME}" \
   bash "${AI_MODULE}" run 2>&1)" || code_ah="$?"
 if [[ "${code_ah}" -eq 0 ]]; then
   pass "happy path run exits 0"
 else
   fail "happy path run exits 0 (got ${code_ah})"
+fi
+if printf '%s\n' "${output_ah}" | grep -qi '\[y/N\]'; then
+  fail "appimage-installer asks no y/N question once launched (MB-004 completion violated)"
+else
+  pass "appimage-installer asks no y/N question once launched (the menu confirms; MB-004 completion)"
 fi
 if [[ -f "${AI_AH_COPY}" && -x "${AI_AH_COPY}" ]] \
   && cmp -s "${AI_AH_COPY}" "${AI_FIXTURES}/My_App-v1.AppImage"; then
@@ -2065,7 +2076,7 @@ fi
 printf 'Stage ai: appimage-installer idempotency\n'
 output_ai=""
 code_ai="0"
-output_ai="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+output_ai="$(printf '%s\n\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
   MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AH_HOME}" \
   bash "${AI_MODULE}" run 2>&1)" || code_ai="$?"
 if [[ "${code_ai}" -eq 0 ]]; then
@@ -2186,7 +2197,7 @@ printf 'pre-existing different bytes\n' > "${AI_AL_INSTALL}/my-app-v1.AppImage"
 cp -a "${AI_AL_INSTALL}/my-app-v1.AppImage" "${TMPBASE}/ai-al-seed.ref"
 output_al=""
 code_al="0"
-output_al="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+output_al="$(printf '%s\n\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
   MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AL_HOME}" \
   bash "${AI_MODULE}" run 2>&1)" || code_al="$?"
 if [[ "${code_al}" -eq 0 ]]; then
@@ -2219,7 +2230,7 @@ mkdir -p "${AI_AL2_INSTALL}"
 cp "${AI_FIXTURES}/My_App-v1.AppImage" "${AI_AL2_INSTALL}/my-app-v1.AppImage"
 output_al2=""
 code_al2="0"
-output_al2="$(printf '%s\n\ny\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
+output_al2="$(printf '%s\n\n' "${AI_FIXTURES}/My_App-v1.AppImage" | \
   MINTBUTLER_TEST_APP_DIRS="${AI_SYS_EMPTY}" HOME="${AI_AL2_HOME}" \
   bash "${AI_MODULE}" run 2>&1)" || code_al2="$?"
 if [[ "${code_al2}" -eq 0 ]]; then
